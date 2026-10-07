@@ -89,7 +89,8 @@ class TeleopCommands:
         self.increment_height = 0.01
 
         env.commands[:] = 0.0
-        env.commands[:, 0] = 1.0  # seed forward velocity so motion is visible
+        if env.commands.shape[1] > 3:
+            env.commands[:, 3] = env.cfg.reward_settings.base_height_target
         if hasattr(env.cfg, "commands"):
             env.cfg.commands.resampling_time = env.max_episode_length_s + 1
 

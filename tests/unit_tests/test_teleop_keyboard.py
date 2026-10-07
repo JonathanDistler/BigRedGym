@@ -108,7 +108,7 @@ def test_hook_is_registered_on_backend():
 def test_held_key_steps_command_once_per_press():
     """The whole point of edge detection: holding I for many frames = ONE step."""
     env, ui, render = _make_vsim()
-    start = env.commands[0, 0].item()  # seeded to 1.0
+    start = env.commands[0, 0].item()
     step = ui.commands.increment_x
 
     render.held = {BINDINGS["forward"]}
