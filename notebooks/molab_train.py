@@ -37,6 +37,7 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import os
+    import hashlib
     import re
     import subprocess
     import textwrap
@@ -45,7 +46,7 @@ def _():
 
     import marimo as mo
 
-    return Path, mo, os, re, subprocess, textwrap, zipfile
+    return Path, hashlib, mo, os, re, subprocess, textwrap, zipfile
 
 
 @app.cell(hide_code=True)
@@ -136,6 +137,7 @@ def _(BRANCH, ENV, REPO, REPO_URL, subprocess, textwrap):
         fi
 
         cd {REPO}
+        git log -1 --format='Training checkout: %H %s'
         uv python install 3.11          # pyproject pins requires-python == 3.11.*
         # --extra gpu pulls mujoco-warp (CUDA); --no-dev skips pytest/ruff/marimo.
         uv sync --frozen --extra gpu --no-dev || uv sync --extra gpu --no-dev
@@ -191,8 +193,10 @@ def _():
     DEVICE = "cuda:0" # specifies which GPU to use - do not edit this line unless you know what this means!
     NUM_ENVS = 4096 # we specify multiples of 2 to compensate for the hardware.
     MAX_ITERATIONS = 550
-    EXPERIMENT_NAME = ""  # blank -> the task's default
+    EXPERIMENT_NAME = "go2trot_height"  # separate the height run from old policies
     RESUME = False  # resume the newest run for this experiment (if you stopped a training run)
+    LOAD_RUN = ""  # explicit run directory when resuming; blank selects latest
+    CHECKPOINT = -1  # -1 selects the latest checkpoint in LOAD_RUN
     USE_WANDB = False  # don't worry about this for now, we'll go over it later in the course.
     return (
         DEVICE,
@@ -200,6 +204,8 @@ def _():
         MAX_ITERATIONS,
         NUM_ENVS,
         RESUME,
+        LOAD_RUN,
+        CHECKPOINT,
         TASK,
         USE_WANDB,
     )
@@ -214,6 +220,8 @@ def _(
     NUM_ENVS,
     REPO,
     RESUME,
+    LOAD_RUN,
+    CHECKPOINT,
     TASK,
     USE_WANDB,
     subprocess,
@@ -228,9 +236,15 @@ def _(
         _cmd += ["--experiment_name", EXPERIMENT_NAME.strip()]
     if RESUME:
         _cmd += ["--resume"]
+        if LOAD_RUN.strip():
+            _cmd += ["--load_run", LOAD_RUN.strip()]
+        _cmd += ["--checkpoint", str(int(CHECKPOINT))]
     if not USE_WANDB:
         _cmd += ["--disable_wandb"]
 
+    subprocess.run(["git", "log", "-1", "--format=Training checkout: %H %s"],
+                   cwd=REPO, env=ENV, check=True)
+    print("Fresh policy" if not RESUME else "Resuming saved policy", flush=True)
     print(" ".join(_cmd), "\n", flush=True)
     # Streamed line by line rather than captured, so the log appears while
     # training runs instead of all at once at the end.
@@ -307,7 +321,7 @@ def _():
 
 
 @app.cell
-def _(Path, RUNS_TO_ZIP, WORK, iteration, mo, runs, zipfile):
+def _(Path, RUNS_TO_ZIP, WORK, hashlib, iteration, mo, runs, zipfile):
     if not runs:
         raise RuntimeError("no checkpoints to zip -- run section 2 first")
     if RUNS_TO_ZIP is None:
@@ -331,6 +345,8 @@ def _(Path, RUNS_TO_ZIP, WORK, iteration, mo, runs, zipfile):
                     _arc = Path(_run.parent.name) / _run.name / _f.relative_to(_run)
                     _zf.write(_f, _arc)
             _ckpts = sorted(_run.glob("model_*.pt"), key=iteration)
+            print(f"Latest checkpoint: {_ckpts[-1].name}")
+            print(f"SHA256: {hashlib.sha256(_ckpts[-1].read_bytes()).hexdigest()}")
             print(
                 f"added {_run.parent.name}/{_run.name}: {len(_ckpts)} ckpt, "
                 f"iters {iteration(_ckpts[0])}..{iteration(_ckpts[-1])}"

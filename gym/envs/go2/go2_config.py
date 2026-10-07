@@ -33,6 +33,9 @@ class Go2Cfg(LeggedRobotCfg):
         num_envs = 2**12
         num_actuators = 12
         episode_length_s = 3
+        # A collapsed robot can rest on its legs without torso contact.
+        # Keep this below the lowest requested standing height (0.30 m).
+        min_base_height = 0.20
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = "plane"
@@ -220,10 +223,10 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 dof_pos_limits = 0.0
                 feet_contact_forces = 0.0
                 dof_near_home = 0.0
-                tracking_base_height=2.0 # added to keep track of base height reward
+                tracking_base_height = 5.0
 
             class termination_weight:
-                termination = 0.01
+                termination = 2.0
 
     class algorithm(LeggedRobotRunnerCfg.algorithm):
         # Preserve the old runner's collection geometry: it collected one

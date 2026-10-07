@@ -10,11 +10,13 @@ Supports MuJoCo CPU/Warp and optional VSim checkpoints.
 """
 
 import argparse
+import hashlib
 import random
+from pathlib import Path
 
 import torch
 
-from gym.utils.helpers import set_seed
+from gym.utils.helpers import get_load_path, set_seed
 from gym.utils.task_registry import task_registry
 
 
@@ -112,6 +114,23 @@ def setup(args):
         train_cfg.runner.load_run = args.load_run
     train_cfg.runner.checkpoint = args.checkpoint
     train_cfg.logging.enable_local_saving = False
+
+    checkpoint_path = Path(
+        get_load_path(
+            train_cfg.runner.experiment_name,
+            train_cfg.runner.load_run,
+            train_cfg.runner.checkpoint,
+        )
+    )
+    digest = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    print(f"Playback checkpoint: {checkpoint_path}\nSHA256: {digest}")
+    if checkpoint_path.stem == "model_0":
+        print("WARNING: model_0 is the initial policy, before any training updates.")
+    if not args.original_cfg:
+        print(
+            "Using current local configs. Use --original_cfg with the complete "
+            "downloaded run to reproduce its training configuration."
+        )
 
     task_registry.convert_frequencies_to_params(env_cfg, train_cfg)
     task_registry.set_log_dir_name(train_cfg)

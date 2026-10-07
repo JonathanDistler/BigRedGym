@@ -64,6 +64,12 @@ class LeggedRobot(BaseTask):
     def _pre_decimation_step(self):
         return None
 
+    def _check_terminations_and_timeouts(self):
+        super()._check_terminations_and_timeouts()
+        min_height = getattr(self.cfg.env, "min_base_height", None)
+        if min_height is not None:
+            self.terminated |= self.root_states[:, 2] < min_height
+
     def _pre_compute_torques(self):
         return None
 
