@@ -98,7 +98,6 @@ class Go2Trot(LeggedRobot):
         ).view(self.torques.shape)
 
     def _reset_system(self, reset_mask):
-        super()._reset_system(reset_mask)
         phase = torch_rand_float(
             0,
             2 * torch.pi,
@@ -113,6 +112,17 @@ class Go2Trot(LeggedRobot):
         )
         masked_update(self.phase, phase, reset_mask)
         masked_update(self.phase_frequency, phase_frequency, reset_mask)
+        self._update_gait_reference()
+        super()._reset_system(reset_mask)
+
+    def reset_to_basic(self, reset_mask):
+        super().reset_to_basic(reset_mask)
+        # default_dof_pos is the residual origin, not the physical standing
+        # posture. Start at the controller's reference for the sampled phase.
+        posture = self.default_dof_pos.expand(self.num_envs, -1).clone()
+        posture[:, self.actuated_dof_indices] += self.gait_reference
+        posture.clamp_(min=self.dof_pos_limits[:, 0], max=self.dof_pos_limits[:, 1])
+        masked_update(self.dof_pos, posture, reset_mask)
 
     def _resample_commands(self, command_mask):
         super()._resample_commands(command_mask)

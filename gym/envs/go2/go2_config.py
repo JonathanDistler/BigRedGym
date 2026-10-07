@@ -211,7 +211,9 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 orientation = 1.0
                 torques = 5.0e-6
                 dof_vel = 0.0
-                min_base_height = 1.5
+                # Command tracking replaces the fixed-height objective so
+                # crouching is not penalized for being below 0.40m.
+                min_base_height = 0.0
                 action_rate = 0.1
                 action_rate2 = 0.01
                 stand_still = 0.0

@@ -55,6 +55,20 @@ def _reference(task):
     return reference + task.default_dof_pos[:, task.actuated_dof_indices]
 
 
+def test_basic_reset_matches_phase_reference_and_preserves_other_world(task):
+    mask = torch.tensor([True, False])
+    untouched = task.dof_pos[1].clone()
+    task._reset_idx(mask)
+    limits = task.dof_pos_limits[task.actuated_dof_indices]
+    expected = _reference(task).clamp(min=limits[:, 0], max=limits[:, 1])
+    torch.testing.assert_close(task.dof_pos[0], expected[0])
+    torch.testing.assert_close(task.dof_pos[1], untouched)
+    torch.testing.assert_close(
+        task.dof_pos_obs[0], task.dof_pos[0] - task.default_dof_pos[0]
+    )
+    assert torch.count_nonzero(task.dof_pos_target[0]) == 0
+
+
 def test_full_position_commands_reach_both_limits_with_nonzero_reference(task):
     limits = task.dof_pos_limits[task.actuated_dof_indices]
     reference = _reference(task)

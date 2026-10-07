@@ -24,7 +24,7 @@ natural U/O pair collides with vsim's step toggle:
      N M             N / M   yaw left / right
                      R       reset envs
                      Esc     quit (or close the window)
-                     Up/Down up / down (command effects: student TODO)
+                     Up/Down raise / lower desired base height
 
 GLFW (MuJoCo) uses ASCII codes for letter keys, so `ord(letter)` is the
 keycode. Each viewer adapter translates named special keys such as UP/DOWN
@@ -53,7 +53,7 @@ HELP_LINES = (
     "  I/K           forward / back",
     "  J/L           strafe left / strafe right",
     "  N/M           yaw left / yaw right",
-    "  Up/Down       up / down (command effects: student TODO)",
+    "  Up/Down       raise / lower base height by 0.01 m",
     "  R             reset envs",
     "  Esc / window  quit",
     "  commands step in 1/5 increments of max",
@@ -79,10 +79,12 @@ class TeleopCommands:
         self.max_vel_yaw = 2.0
         self.increment_yaw = self.max_vel_yaw * 0.2
 
-        # added to increment height 
+        # added to increment height
 
         # Height control parameters
-        height_ranges = getattr(env, "command_ranges", {}).get("base_height", [0.30, 0.45])
+        height_ranges = getattr(env, "command_ranges", {}).get(
+            "base_height", [0.30, 0.45]
+        )
 
         self.min_height = height_ranges[0]
         self.max_height = height_ranges[1]
@@ -90,7 +92,10 @@ class TeleopCommands:
 
         env.commands[:] = 0.0
         if env.commands.shape[1] > 3:
-            env.commands[:, 3] = env.cfg.reward_settings.base_height_target
+            env.commands[:, 3] = min(
+                self.max_height,
+                max(self.min_height, env.cfg.reward_settings.base_height_target),
+            )
         if hasattr(env.cfg, "commands"):
             env.cfg.commands.resampling_time = env.max_episode_length_s + 1
 
@@ -112,28 +117,46 @@ class TeleopCommands:
         elif action == "yaw_right":
             c[:, 2] = torch.clamp(c[:, 2] - self.increment_yaw, min=-self.max_vel_yaw)
 
-        #two new functions for up and down actions
+        # two new functions for up and down actions
         elif action == "up":
             if c.shape[1] > 3:
-                current_height = torch.clamp(c[:, 3], min=self.min_height, max=self.max_height,)
+                current_height = torch.clamp(
+                    c[:, 3],
+                    min=self.min_height,
+                    max=self.max_height,
+                )
 
-                c[:, 3] = torch.clamp(current_height + self.increment_height, min=self.min_height, max=self.max_height,)
+                c[:, 3] = torch.clamp(
+                    current_height + self.increment_height,
+                    min=self.min_height,
+                    max=self.max_height,
+                )
 
         elif action == "down":
             if c.shape[1] > 3:
-                current_height = torch.clamp(c[:, 3], min=self.min_height, max=self.max_height,)
+                current_height = torch.clamp(
+                    c[:, 3],
+                    min=self.min_height,
+                    max=self.max_height,
+                )
 
-                c[:, 3] = torch.clamp(current_height - self.increment_height, min=self.min_height, max=self.max_height,)
+                c[:, 3] = torch.clamp(
+                    current_height - self.increment_height,
+                    min=self.min_height,
+                    max=self.max_height,
+                )
 
         elif action == "reset":
+            requested_commands = c.clone()
             self.env.timed_out[:] = True
             self.env.reset()
+            self.env.commands.copy_(requested_commands)
         else:
             raise ValueError(f"unknown teleop action {action!r}")
 
         # Debug height control only when the height command exists
         if c.shape[1] > 3 and action in ("up", "down"):
-            print(f"Action: {action}, "f"Desired height: {c[0, 3].item():.3f} m")
+            print(f"Action: {action}, Desired height: {c[0, 3].item():.3f} m")
 
     def print_help(self, viewer_name: str) -> None:
         print("______________________________________________________________")
