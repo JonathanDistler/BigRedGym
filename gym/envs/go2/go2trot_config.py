@@ -161,10 +161,11 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 dof_pos_limits = 0.0
                 feet_contact_forces = 0.0
                 dof_near_home = 0.0
-                min_base_height = 0.5
+                min_base_height = 0.0
                 action_rate = 0.25
                 action_rate2 = 0.025
                 trot_support = 0.625
+                tracking_base_height = 2.0
                 swing_contact = 1.25
 
             class termination_weight:
