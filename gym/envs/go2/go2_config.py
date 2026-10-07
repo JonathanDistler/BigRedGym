@@ -95,6 +95,10 @@ class Go2Cfg(LeggedRobotCfg):
             lin_vel_y = 1.0  # max [m/s]
             yaw_vel = 3  # max [rad/s]
 
+            base_height = [0.30, 0.45] #desired base height in m
+
+            
+
     class push_robots:
         toggle = False
         interval_s = 1
@@ -149,7 +153,7 @@ class Go2Cfg(LeggedRobotCfg):
         dof_pos_obs = dof_pos
         dof_pos_target = [0.5 * x for x in dof_pos]
         tau_ff = 4 * [23.7, 23.7, 45.43]
-        commands = [3, 1, 3]
+        commands = [3, 1, 3, .45] #adds a longer vector for height; divided by maximum height standardizes/clips to 1
 
 
 class Go2RunnerCfg(LeggedRobotRunnerCfg):
@@ -214,6 +218,7 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 dof_pos_limits = 0.0
                 feet_contact_forces = 0.0
                 dof_near_home = 0.0
+                tracking_base_height=2.0 # added to keep track of base height reward
 
             class termination_weight:
                 termination = 0.01

@@ -79,6 +79,15 @@ class TeleopCommands:
         self.max_vel_yaw = 2.0
         self.increment_yaw = self.max_vel_yaw * 0.2
 
+        # added to increment height 
+
+        # Height control parameters
+        height_ranges = getattr(env, "command_ranges", {}).get("base_height", [0.30, 0.45])
+
+        self.min_height = height_ranges[0]
+        self.max_height = height_ranges[1]
+        self.increment_height = 0.01
+
         env.commands[:] = 0.0
         env.commands[:, 0] = 1.0  # seed forward velocity so motion is visible
         if hasattr(env.cfg, "commands"):
@@ -101,11 +110,25 @@ class TeleopCommands:
             c[:, 2] = torch.clamp(c[:, 2] + self.increment_yaw, max=self.max_vel_yaw)
         elif action == "yaw_right":
             c[:, 2] = torch.clamp(c[:, 2] - self.increment_yaw, min=-self.max_vel_yaw)
+
+        #two new functions for up and down actions
+        elif action == "up":
+            if c.shape[1] > 3:
+                c[:, 3] = torch.clamp(c[:, 3] + self.increment_height, max=self.max_height,)
+
+        elif action == "down":
+            if c.shape[1] > 3:
+                c[:, 3] = torch.clamp(c[:, 3] - self.increment_height, min=self.min_height,)
+
         elif action == "reset":
             self.env.timed_out[:] = True
             self.env.reset()
         else:
             raise ValueError(f"unknown teleop action {action!r}")
+
+        # Debug height control only when the height command exists
+        if c.shape[1] > 3 and action in ("up", "down"):
+            print(f"Action: {action}, "f"Desired height: {c[0, 3].item():.3f} m")
 
     def print_help(self, viewer_name: str) -> None:
         print("______________________________________________________________")

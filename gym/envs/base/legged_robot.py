@@ -111,6 +111,7 @@ class LeggedRobot(BaseTask):
             if self.common_step_counter % self.cfg.push_interval == 0:
                 self._push_robots()
 
+
     def _reset_idx(self, reset_mask):
         # * reset robot states
         self._reset_system(reset_mask)
@@ -193,31 +194,44 @@ class LeggedRobot(BaseTask):
     def _resample_commands(self, command_mask):
         """Randomly sample commands for selected environments."""
         candidate = torch.empty_like(self.commands)
+
+        # Forward velocity
         candidate[:, 0] = torch_rand_float(
-            self.command_ranges["lin_vel_x"][0],
-            self.command_ranges["lin_vel_x"][1],
-            (self.num_envs, 1),
-            device=self.device,
+        self.command_ranges["lin_vel_x"][0],
+        self.command_ranges["lin_vel_x"][1],
+        (self.num_envs, 1),
+        device=self.device,
         ).squeeze(1)
+
+        # Lateral velocity
         candidate[:, 1] = torch_rand_float(
-            -self.command_ranges["lin_vel_y"],
-            self.command_ranges["lin_vel_y"],
-            (self.num_envs, 1),
-            device=self.device,
+        -self.command_ranges["lin_vel_y"],
+        self.command_ranges["lin_vel_y"],
+        (self.num_envs, 1),
+        device=self.device,
         ).squeeze(1)
+
+        # Yaw velocity
         max_yaw_vel = self.command_ranges["yaw_vel"]
+
         candidate[:, 2] = torch_rand_float(
-            -max_yaw_vel,
-            max_yaw_vel,
-            (self.num_envs, 1),
-            device=self.device,
+        -max_yaw_vel,
+        max_yaw_vel,
+        (self.num_envs, 1),
+        device=self.device,
         ).squeeze(1)
 
-        # set small commands to zero
+        # NEW: Desired base height
+        if "base_height" in self.command_ranges:
+            candidate[:, 3] = torch_rand_float(self.command_ranges["base_height"][0], self.command_ranges["base_height"][1], (self.num_envs, 1), device=self.device,).squeeze(1)
+        # Set small planar velocity commands to zero
         small_commands = torch.norm(candidate[:, :2], dim=1) <= 0.2
-        candidate[:, :2].masked_fill_(small_commands.unsqueeze(1), 0.0)
-        masked_update(self.commands, candidate, command_mask)
 
+        candidate[:, :2].masked_fill_(
+        small_commands.unsqueeze(1), 0.0
+        )
+
+        masked_update(self.commands, candidate, command_mask)
     def _set_camera(self, position, lookat):
         """Set camera position and direction"""
         self._backend.set_camera(position, lookat)
@@ -429,9 +443,9 @@ class LeggedRobot(BaseTask):
         self.dof_pos_history = torch.zeros(
             self.num_envs, self.num_actuators * 3, dtype=torch.float, device=self.device
         )
-        self.commands = torch.zeros(
-            self.num_envs, 3, dtype=torch.float, device=self.device
-        )
+        num_commands = 4 if "base_height" in self.command_ranges else 3
+
+        self.commands = torch.zeros( self.num_envs, num_commands, dtype=torch.float, device=self.device,)
         self.base_lin_vel = quat_rotate_inverse(
             self.base_quat, self.root_states[:, 7:10]
         )
@@ -564,6 +578,16 @@ class LeggedRobot(BaseTask):
         """Penalize base height away from target"""
         target = self.cfg.reward_settings.base_height_target
         return -torch.square(self.root_states[:, 2] - target)
+
+    def _reward_tracking_base_height(self):
+        """Reward tracking desired base height."""
+
+        desired_height = self.commands[:, 3]
+        actual_height = self.root_states[:, 2]
+
+        height_error = actual_height - desired_height
+
+        return torch.exp(-torch.square(height_error) / 0.01)
 
     def _reward_torques(self):
         """Penalize torques"""
