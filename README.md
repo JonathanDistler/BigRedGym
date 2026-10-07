@@ -150,12 +150,23 @@ Robots dropping below 0.20m indicate collapse or a very low posture even if
 the simulator does not flag a base-contact fall. This is a quick diagnostic,
 not a complete locomotion validation.
 
-`--height_sweep` tests standing at 0.30, 0.375, and 0.45 m with zero velocity
+`--height_sweep` tests standing at 0.30, 0.35, and 0.40 m with zero velocity
 commands and prints average height error after settling. In interactive
 playback, Up/Down changes desired height by 0.01 m within those bounds;
 I/J/K/L/N/M retain their locomotion controls. Reset preserves your commands.
 These bounds are training targets, not proof that every target is physically
 achievable while walking. Evaluate the low and high targets after training.
+
+Go2 now starts teleop at 0.35 m. Trot reference motion and the swing-contact
+penalty fade to zero at zero locomotion commands; standing rewards support
+from all four feet and penalizes loaded feet sliding horizontally. Height-only
+commands set a symmetric standing leg reference using the Go2 link lengths.
+Residual action scaling is 0.25 radians per policy unit, and linear velocity
+observations use a 3 m/s divisor. These changes affect the controller and
+policy inputs: existing checkpoints need evaluation and further training with
+the current configuration. Loading `--original_cfg` restores the old settings.
+The height sweep also reports base drift and contact-foot speed to expose
+slipping that fall counts alone miss.
 
 Bare `play.py --task go2trot` selects the newest local run, which may be a
 short local training attempt instead of the imported cloud run. The VS Code

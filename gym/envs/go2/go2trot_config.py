@@ -41,6 +41,9 @@ class Go2TrotCfg(Go2Cfg):
         ctrl_frequency = 100
         desired_sim_frequency = 100
         gait_freq = [1.0, 3.0]  # oscillator frequency range [Hz]
+        standing_command_threshold = 0.2
+        standing_leg_length = 0.213
+        standing_foot_radius = 0.022
         # Cycle offsets define a trot: front-left/rear-right move together,
         # half a cycle away from front-right/rear-left.
         gait_phase_offsets = {
@@ -55,7 +58,7 @@ class Go2TrotCfg(Go2Cfg):
         # The thigh/calf amplitudes approximately preserve fore-aft foot
         # position while alternately extending the stance diagonal and
         # shortening the swing diagonal.
-        gait_joint_offsets = 4 * [0.0, 0.96, -1.36]
+        gait_joint_offsets = 4 * [0.0, 0.68, -1.36]
         gait_joint_amplitudes = 4 * [0.0, -0.15, 0.30]
 
     class commands(Go2Cfg.commands):
@@ -99,7 +102,8 @@ class Go2TrotCfg(Go2Cfg):
         base_height = 0.3
         dof_pos = 4 * [1.0472, 2.53075, 0.94247]
         dof_pos_obs = dof_pos
-        dof_pos_target = [0.5 * x for x in dof_pos]
+        # Residual actions are radians per policy unit, not joint ranges.
+        dof_pos_target = 12 * [0.25]
         tau_ff = 4 * [23.7, 23.7, 45.43]
 
 
@@ -171,6 +175,7 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 trot_support = 0.625
                 tracking_base_height = 5.0
                 swing_contact = 1.25
+                feet_slip = 1.0
 
             class termination_weight:
                 termination = 2.0

@@ -51,7 +51,18 @@ def _reference(task):
     ).repeat_interleave(3)
     reference = torch.tensor(cfg.control.gait_joint_offsets) + torch.tensor(
         cfg.control.gait_joint_amplitudes
-    ) * torch.sin(task.phase + 2 * torch.pi * phases)
+    ) * torch.sin(
+        task.phase + 2 * torch.pi * phases
+    ) * task._locomotion_blend().unsqueeze(1)
+    blend = task._locomotion_blend().unsqueeze(1)
+    extension = (task.commands[:, 3:4] - cfg.control.standing_foot_radius) / (
+        2 * cfg.control.standing_leg_length
+    )
+    thigh = torch.acos(extension.clamp(0, 1))
+    standing = torch.cat((torch.zeros_like(thigh), thigh, -2 * thigh), dim=1).repeat(
+        1, 4
+    )
+    reference = blend * reference + (1 - blend) * standing
     return reference + task.default_dof_pos[:, task.actuated_dof_indices]
 
 
@@ -150,6 +161,7 @@ def test_command_limits_follow_permuted_actuators_with_passive_dofs(monkeypatch)
         task.dof_pos_limits = torch.stack((lower, upper), dim=1)
         task.default_dof_pos = torch.arange(14, dtype=torch.float).unsqueeze(0)
         task.dof_pos_target = torch.zeros(2, 12)
+        task.commands = torch.ones(2, 4)
         task.robot_layout = SimpleNamespace(
             body_groups={"feet": tuple(cfg.control.gait_phase_offsets)}
         )

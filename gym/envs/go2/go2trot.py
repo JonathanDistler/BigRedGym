@@ -57,10 +57,34 @@ class Go2Trot(LeggedRobot):
 
     def _update_gait_reference(self):
         joint_phase = self.phase + self._gait_dof_phase_offsets.unsqueeze(0)
+        blend = self._locomotion_blend().unsqueeze(1)
         self.gait_reference[:] = (
             self._gait_joint_offsets
-            + self._gait_joint_amplitudes * torch.sin(joint_phase)
+            + self._gait_joint_amplitudes * torch.sin(joint_phase) * blend
         )
+        leg_length = getattr(self.cfg.control, "standing_leg_length", None)
+        if leg_length is not None:
+            # Symmetric thigh/calf posture keeps feet beneath the hips as
+            # height changes. The policy supplies balance residuals around it.
+            height = self.commands[:, 3:4]
+            extension = (height - self.cfg.control.standing_foot_radius) / (
+                2 * leg_length
+            )
+            thigh = torch.acos(extension.clamp(0.0, 1.0))
+            standing = torch.cat(
+                (torch.zeros_like(thigh), thigh, -2 * thigh), dim=1
+            ).repeat(1, 4)
+            self.gait_reference[:] = (
+                blend * self.gait_reference + (1 - blend) * standing
+            )
+
+    def _locomotion_blend(self):
+        # Older saved configs retain their original reference behavior.
+        threshold = getattr(self.cfg.control, "standing_command_threshold", None)
+        if threshold is None:
+            return torch.ones(self.num_envs, device=self.device)
+        speed = torch.linalg.vector_norm(self.commands[:, :3], dim=1)
+        return (speed / threshold).clamp(0.0, 1.0)
 
     def _leg_phases(self):
         return torch.remainder(
@@ -151,7 +175,7 @@ class Go2Trot(LeggedRobot):
             )
             self.commands[:, :2].masked_fill_(drop, 0.0)
             drop = command_mask.unsqueeze(1) & (
-                torch.rand(self.num_envs, 1, device=self.device) >= 0.9
+                torch.rand(self.num_envs, 1, device=self.device) >= 0.8
             )
             self.commands[:, :3].masked_fill_(drop, 0.0)
 
@@ -204,12 +228,26 @@ class Go2Trot(LeggedRobot):
             2.0 * torch.sqrt(torch.prod(stance_strength, dim=1)),
             max=1.0,
         )
-        return torch.relu(phase).amax(dim=1) * paired_support
+        moving = torch.relu(phase).amax(dim=1) * paired_support
+        standing = torch.clamp(4.0 * contact_strength.amin(dim=1), max=1.0)
+        blend = self._locomotion_blend()
+        return blend * moving + (1.0 - blend) * standing
 
     def _reward_swing_contact(self):
         """Penalize load carried by feet during their scheduled swing phase."""
         phase = torch.sin(self._leg_phases())
-        return -torch.mean(torch.relu(-phase) * self._foot_contact_strength(), dim=1)
+        return (
+            -torch.mean(torch.relu(-phase) * self._foot_contact_strength(), dim=1)
+            * self._locomotion_blend()
+        )
+
+    def _reward_feet_slip(self):
+        """Penalize horizontal motion only for feet carrying contact load."""
+        contact = self.contact_forces[:, self.feet_indices, 2] > 1.0
+        speed_squared = (
+            self._rigid_body_lin_vel[:, self.feet_indices, :2].square().sum(dim=2)
+        )
+        return -(speed_squared * contact).sum(dim=1)
 
     def _reward_lin_vel_z(self):
         """Penalize z axis base linear velocity with squared exp"""

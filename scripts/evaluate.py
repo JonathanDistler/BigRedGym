@@ -18,6 +18,8 @@ def evaluate(env, runner, seconds=5.0, height=None):
     low = torch.zeros_like(fell)
     height_sum = torch.zeros_like(initial_height)
     error_sum = torch.zeros_like(initial_height)
+    slip_sum = torch.zeros_like(initial_height)
+    initial_xy = env.root_states[:, :2].clone()
     samples = 0
     steps = int(seconds / env.dt)
     for step in range(steps):
@@ -36,9 +38,17 @@ def evaluate(env, runner, seconds=5.0, height=None):
         if height is not None and step >= steps // 2:
             height_sum += env.root_states[:, 2]
             error_sum += (env.root_states[:, 2] - env.commands[:, 3]).abs()
+            contact = env.contact_forces[:, env.feet_indices, 2] > 1.0
+            foot_speed = env._rigid_body_lin_vel[:, env.feet_indices, :2].norm(dim=2)
+            slip_sum += (foot_speed * contact).sum(dim=1) / contact.sum(dim=1).clamp(
+                min=1
+            )
             samples += 1
     print(f"Evaluation: {seconds:g}s, {env.num_envs} robots, no episode resets")
-    print(f"Fall terminations (contact or configured low height): {fell.sum().item()}/{env.num_envs}")
+    print(
+        "Fall terminations (contact or configured low height): "
+        f"{fell.sum().item()}/{env.num_envs}"
+    )
     print(f"Robots below 0.20m: {low.sum().item()}/{env.num_envs}")
     print(f"Mean minimum base height: {minimum_height.mean().item():.3f}m")
     print(f"Mean final base height: {env.root_states[:, 2].mean().item():.3f}m")
@@ -47,6 +57,11 @@ def evaluate(env, runner, seconds=5.0, height=None):
             f"Target: {height:.3f}m; settled mean height: "
             f"{height_sum.mean().item() / samples:.3f}m; "
             f"mean absolute error: {error_sum.mean().item() / samples:.3f}m"
+        )
+        drift = (env.root_states[:, :2] - initial_xy).norm(dim=1).mean().item()
+        print(
+            f"Mean base drift: {drift:.3f}m; "
+            f"settled contact-foot speed: {slip_sum.mean().item() / samples:.3f}m/s"
         )
 
 

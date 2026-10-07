@@ -119,10 +119,12 @@ class LeggedRobot(BaseTask):
 
 
     def _reset_idx(self, reset_mask):
+        # Command-dependent standing references must use the new episode's
+        # requested height and velocity when choosing the reset posture.
+        self._resample_commands(reset_mask)
         # * reset robot states
         self._reset_system(reset_mask)
         self._refresh_base_observations(reset_mask)
-        self._resample_commands(reset_mask)
         # * reset buffers
         masked_update(
             self.dof_pos_obs,

@@ -3,7 +3,7 @@ from gym.envs.base.legged_robot_config import (
     LeggedRobotRunnerCfg,
 )
 
-BASE_HEIGHT_REF = 0.4
+BASE_HEIGHT_REF = 0.35
 
 GO2_DOF_NAMES = [
     "FL_hip_joint",
@@ -98,9 +98,9 @@ class Go2Cfg(LeggedRobotCfg):
             lin_vel_y = 1.0  # max [m/s]
             yaw_vel = 3  # max [rad/s]
 
-            base_height = [0.30, 0.45] #desired base height in m
-
-            
+            # Leave knee flexion at the upper target rather than demanding
+            # nearly straight legs (two 0.213 m links plus the foot radius).
+            base_height = [0.30, 0.40]
 
     class push_robots:
         toggle = False
@@ -149,14 +149,15 @@ class Go2Cfg(LeggedRobotCfg):
 
     class scaling(LeggedRobotCfg.scaling):
         base_ang_vel = 0.3
-        base_lin_vel = BASE_HEIGHT_REF
+        base_lin_vel = 3.0
         dof_vel = 4 * [2.0, 2.0, 4.0]
         base_height = 0.3
         dof_pos = 4 * [1.0472, 2.53075, 0.94247]
         dof_pos_obs = dof_pos
-        dof_pos_target = [0.5 * x for x in dof_pos]
+        dof_pos_target = 12 * [0.25]
         tau_ff = 4 * [23.7, 23.7, 45.43]
-        commands = [3, 1, 3, .45] #adds a longer vector for height; divided by maximum height standardizes/clips to 1
+        # Observations divide by these values; scaling does not clip commands.
+        commands = [3.0, 1.0, 3.0, 0.40]
 
 
 class Go2RunnerCfg(LeggedRobotRunnerCfg):
