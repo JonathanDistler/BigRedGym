@@ -114,11 +114,15 @@ class TeleopCommands:
         #two new functions for up and down actions
         elif action == "up":
             if c.shape[1] > 3:
-                c[:, 3] = torch.clamp(c[:, 3] + self.increment_height, max=self.max_height,)
+                current_height = torch.clamp(c[:, 3], min=self.min_height, max=self.max_height,)
+
+                c[:, 3] = torch.clamp(current_height + self.increment_height, min=self.min_height, max=self.max_height,)
 
         elif action == "down":
             if c.shape[1] > 3:
-                c[:, 3] = torch.clamp(c[:, 3] - self.increment_height, min=self.min_height,)
+                current_height = torch.clamp(c[:, 3], min=self.min_height, max=self.max_height,)
+
+                c[:, 3] = torch.clamp(current_height - self.increment_height, min=self.min_height, max=self.max_height,)
 
         elif action == "reset":
             self.env.timed_out[:] = True
