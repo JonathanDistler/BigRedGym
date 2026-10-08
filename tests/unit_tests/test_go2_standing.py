@@ -70,3 +70,24 @@ def test_slip_penalty_ignores_airborne_feet_and_vertical_motion():
     torch.testing.assert_close(
         task._reward_feet_slip(), torch.tensor([-4.0, 0.0, -4.0])
     )
+
+
+def test_moving_height_command_changes_reference_without_changing_gait():
+    task = standing_task()
+    task._update_gait_reference()
+    before = task.gait_reference[2].clone()
+    task.commands[2, 3] += 0.04
+    task._update_gait_reference()
+    assert task.gait_reference[2, 1] < before[1]
+    assert task.gait_reference[2, 2] > before[2]
+
+
+def test_motion_penalty_tracks_command_and_ignores_requested_vertical_motion():
+    task = standing_task()
+    task.base_lin_vel = torch.zeros(3, 3)
+    task.base_lin_vel[:, :2] = task.commands[:, :2]
+    task.base_lin_vel[:, 2] = 0.2
+    task.base_ang_vel = torch.zeros(3, 3)
+    torch.testing.assert_close(task._reward_unwanted_motion(), torch.zeros(3))
+    task.base_lin_vel[:, 0] += 0.5
+    assert torch.all(task._reward_unwanted_motion() < 0)

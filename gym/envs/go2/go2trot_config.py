@@ -1,4 +1,4 @@
-from gym.envs.go2.go2_config import Go2Cfg, Go2RunnerCfg
+from gym.envs.go2.go2_config import Go2Cfg, Go2RunnerCfg, LEG_LENGTH, FOOT_RADIUS
 
 
 class Go2TrotCfg(Go2Cfg):
@@ -36,14 +36,14 @@ class Go2TrotCfg(Go2Cfg):
         ]
 
     class control(Go2Cfg.control):
-        stiffness = {"hip": 20.0, "thigh": 20.0, "calf": 20.0}
-        damping = {"hip": 0.5, "thigh": 0.5, "calf": 0.5}
+        stiffness = {"hip": 60.0, "thigh": 60.0, "calf": 60.0}
+        damping = {"hip": 3.0, "thigh": 3.0, "calf": 3.0}
         ctrl_frequency = 100
-        desired_sim_frequency = 100
+        desired_sim_frequency = 500
         gait_freq = [1.0, 3.0]  # oscillator frequency range [Hz]
         standing_command_threshold = 0.2
-        standing_leg_length = 0.213
-        standing_foot_radius = 0.022
+        standing_leg_length = LEG_LENGTH
+        standing_foot_radius = FOOT_RADIUS
         # Cycle offsets define a trot: front-left/rear-right move together,
         # half a cycle away from front-right/rear-left.
         gait_phase_offsets = {
@@ -161,7 +161,7 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 tracking_lin_vel = 4.0
                 tracking_ang_vel = 2.0
                 lin_vel_z = 0.0
-                ang_vel_xy = 0.01
+                ang_vel_xy = 0.5
                 orientation = 1.0
                 torques = 5.0e-6
                 dof_vel = 0.0
@@ -170,10 +170,12 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 feet_contact_forces = 0.0
                 dof_near_home = 0.0
                 min_base_height = 0.0
-                action_rate = 0.25
-                action_rate2 = 0.025
+                action_rate = 1.0
+                action_rate2 = 0.1
                 trot_support = 0.625
-                tracking_base_height = 5.0
+                tracking_base_height = 10.0
+                unwanted_motion = 2.0
+                residual_motion = 0.5
                 swing_contact = 1.25
                 feet_slip = 1.0
 

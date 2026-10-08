@@ -54,7 +54,6 @@ def _reference(task):
     ) * torch.sin(
         task.phase + 2 * torch.pi * phases
     ) * task._locomotion_blend().unsqueeze(1)
-    blend = task._locomotion_blend().unsqueeze(1)
     extension = (task.commands[:, 3:4] - cfg.control.standing_foot_radius) / (
         2 * cfg.control.standing_leg_length
     )
@@ -62,7 +61,7 @@ def _reference(task):
     standing = torch.cat((torch.zeros_like(thigh), thigh, -2 * thigh), dim=1).repeat(
         1, 4
     )
-    reference = blend * reference + (1 - blend) * standing
+    reference = standing + reference - torch.tensor(cfg.control.gait_joint_offsets)
     return reference + task.default_dof_pos[:, task.actuated_dof_indices]
 
 

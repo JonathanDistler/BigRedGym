@@ -3,7 +3,22 @@ from gym.envs.base.legged_robot_config import (
     LeggedRobotRunnerCfg,
 )
 
-BASE_HEIGHT_REF = 0.35
+# Read the physical leg dimensions from the robot used by both backends.
+import math
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+from gym import GYM_ROOT_DIR
+
+_urdf = ET.parse(Path(GYM_ROOT_DIR) / "resources/robots/go2/urdf/go2.urdf")
+LEG_LENGTH = abs(
+    float(_urdf.find(".//joint[@name='FL_calf_joint']/origin").get("xyz").split()[2])
+)
+FOOT_RADIUS = float(
+    _urdf.find(".//link[@name='FL_foot']/collision/geometry/sphere").get("radius")
+)
+STANDING_THIGH = 0.58
+BASE_HEIGHT_REF = 2 * LEG_LENGTH * math.cos(STANDING_THIGH) + FOOT_RADIUS
 
 GO2_DOF_NAMES = [
     "FL_hip_joint",
@@ -43,8 +58,8 @@ class Go2Cfg(LeggedRobotCfg):
     class init_state(LeggedRobotCfg.init_state):
         default_joint_angles = {
             "hip": 0.0,
-            "thigh": 0.66,
-            "calf": -1.36,
+            "thigh": STANDING_THIGH,
+            "calf": -2 * STANDING_THIGH,
         }
 
         # * reset setup chooses how the initial conditions are chosen.
@@ -53,7 +68,7 @@ class Go2Cfg(LeggedRobotCfg):
         reset_mode = "reset_to_range"
 
         # * default COM for basic initialization
-        pos = [0.0, 0.0, 0.40]  # x,y,z [m]
+        pos = [0.0, 0.0, BASE_HEIGHT_REF + 0.005]  # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
@@ -61,22 +76,22 @@ class Go2Cfg(LeggedRobotCfg):
         # * initialization for random range setup
         dof_pos_range = {
             "hip": [-0.01, 0.01],
-            "thigh": [0.65, 0.67],
-            "calf": [-1.37, -1.35],
+            "thigh": [STANDING_THIGH - 0.01, STANDING_THIGH + 0.01],
+            "calf": [-2 * STANDING_THIGH - 0.01, -2 * STANDING_THIGH + 0.01],
         }
         dof_vel_range = {"hip": [0.0, 0.0], "thigh": [0.0, 0.0], "calf": [0.0, 0.0]}
         root_pos_range = [
             [0.0, 0.0],  # x
             [0.0, 0.0],  # y
-            [0.40, 0.40],  # z
+            [BASE_HEIGHT_REF + 0.005, BASE_HEIGHT_REF + 0.005],  # z
             [0.0, 0.0],  # roll
             [0.0, 0.0],  # pitch
             [0.0, 0.0],  # yaw
         ]
         root_vel_range = [
-            [-0.5, 2.0],  # x
+            [0.0, 0.0],  # x
             [0.0, 0.0],  # y
-            [-0.05, 0.05],  # z
+            [0.0, 0.0],  # z
             [0.0, 0.0],  # roll
             [0.0, 0.0],  # pitch
             [0.0, 0.0],  # yaw
@@ -84,14 +99,15 @@ class Go2Cfg(LeggedRobotCfg):
 
     class control(LeggedRobotCfg.control):
         # * PD Drive parameters:
-        stiffness = {"hip": 20.0, "thigh": 20.0, "calf": 20.0}
-        damping = {"hip": 0.5, "thigh": 0.5, "calf": 0.5}
+        stiffness = {"hip": 60.0, "thigh": 60.0, "calf": 60.0}
+        damping = {"hip": 3.0, "thigh": 3.0, "calf": 3.0}
         ctrl_frequency = 100
-        desired_sim_frequency = 100
+        desired_sim_frequency = 500
 
     class commands:
         # * time before command are changed[s]
-        resampling_time = 3.0
+        resampling_time = 1.0
+        standing_probability = 0.5
 
         class ranges:
             lin_vel_x = [-2.0, 3.0]  # min max [m/s]
@@ -100,7 +116,7 @@ class Go2Cfg(LeggedRobotCfg):
 
             # Leave knee flexion at the upper target rather than demanding
             # nearly straight legs (two 0.213 m links plus the foot radius).
-            base_height = [0.30, 0.40]
+            base_height = [0.28, 0.41]
 
     class push_robots:
         toggle = False
@@ -211,20 +227,22 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 tracking_lin_vel = 4.0
                 tracking_ang_vel = 2.0
                 lin_vel_z = 0.0
-                ang_vel_xy = 0.01
+                ang_vel_xy = 0.5
                 orientation = 1.0
                 torques = 5.0e-6
                 dof_vel = 0.0
                 # Command tracking replaces the fixed-height objective so
                 # crouching is not penalized for being below 0.40m.
                 min_base_height = 0.0
-                action_rate = 0.1
-                action_rate2 = 0.01
+                action_rate = 1.0
+                action_rate2 = 0.1
                 stand_still = 0.0
                 dof_pos_limits = 0.0
                 feet_contact_forces = 0.0
                 dof_near_home = 0.0
-                tracking_base_height = 5.0
+                tracking_base_height = 10.0
+                unwanted_motion = 2.0
+                residual_motion = 0.5
 
             class termination_weight:
                 termination = 2.0

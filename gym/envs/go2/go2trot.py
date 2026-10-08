@@ -3,10 +3,10 @@ import torch
 from gym.utils.sampling import torch_rand_float
 from gym.utils.sampling import masked_update
 
-from gym.envs.base.legged_robot import LeggedRobot
+from gym.envs.go2.go2 import Go2
 
 
-class Go2Trot(LeggedRobot):
+class Go2Trot(Go2):
     def __init__(self, cfg, device, headless, backend):
         super().__init__(cfg, device, headless, backend)
 
@@ -60,22 +60,16 @@ class Go2Trot(LeggedRobot):
         blend = self._locomotion_blend().unsqueeze(1)
         self.gait_reference[:] = (
             self._gait_joint_offsets
-            + self._gait_joint_amplitudes * torch.sin(joint_phase) * blend
+            + self._gait_joint_amplitudes * torch.sin(joint_phase)
         )
         leg_length = getattr(self.cfg.control, "standing_leg_length", None)
         if leg_length is not None:
             # Symmetric thigh/calf posture keeps feet beneath the hips as
             # height changes. The policy supplies balance residuals around it.
-            height = self.commands[:, 3:4]
-            extension = (height - self.cfg.control.standing_foot_radius) / (
-                2 * leg_length
-            )
-            thigh = torch.acos(extension.clamp(0.0, 1.0))
-            standing = torch.cat(
-                (torch.zeros_like(thigh), thigh, -2 * thigh), dim=1
-            ).repeat(1, 4)
-            self.gait_reference[:] = (
-                blend * self.gait_reference + (1 - blend) * standing
+            standing = self._standing_posture()
+            # Height remains controllable during locomotion, too.
+            self.gait_reference[:] = standing + blend * (
+                self.gait_reference - self._gait_joint_offsets
             )
 
     def _locomotion_blend(self):
