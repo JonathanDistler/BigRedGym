@@ -238,11 +238,11 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 action_rate2 = 0.1
                 stand_still = 0.0
                 dof_pos_limits = 0.0
-                feet_contact_forces = 0.0
+                feet_contact_forces = .2 #had originally been 0
                 dof_near_home = 0.0
-                tracking_base_height = 10.0
+                tracking_base_height = 4.0 #had previously been 10 
                 unwanted_motion = 2.0
-                residual_motion = 0.5
+                residual_motion = 1 #had previously been .5
 
             class termination_weight:
                 termination = 2.0

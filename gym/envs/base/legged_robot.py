@@ -229,9 +229,11 @@ class LeggedRobot(BaseTask):
         device=self.device,
         ).squeeze(1)
 
-        # NEW: Desired base height
+        # My attempt at a desired base height 
         if "base_height" in self.command_ranges:
             candidate[:, 3] = torch_rand_float(self.command_ranges["base_height"][0], self.command_ranges["base_height"][1], (self.num_envs, 1), device=self.device,).squeeze(1)
+        
+        
         # Set small planar velocity commands to zero
         small_commands = torch.norm(candidate[:, :2], dim=1) <= 0.2
 
@@ -595,7 +597,8 @@ class LeggedRobot(BaseTask):
 
         height_error = actual_height - desired_height
 
-        return torch.exp(-torch.square(height_error) / 0.01)
+        tolerance = getattr(self.cfg.reward_settings, "base_height_tolerance", 0.1) # changed to be smaller tolerance
+        return torch.exp(-torch.square(height_error / tolerance))
 
     def _reward_torques(self):
         """Penalize torques"""

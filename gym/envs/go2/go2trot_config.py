@@ -69,7 +69,7 @@ class Go2TrotCfg(Go2Cfg):
 
     class push_robots(Go2Cfg.push_robots):
         toggle = True
-        interval_s = 5
+        interval_s = 10 # changed this to 10s, so it is more "on policy"
 
     class domain_randomization(Go2Cfg.domain_randomization):
         class startup(Go2Cfg.domain_randomization.startup):
@@ -95,6 +95,8 @@ class Go2TrotCfg(Go2Cfg):
 
     class reward_settings(Go2Cfg.reward_settings):
         base_height_target = Go2Cfg.reward_settings.base_height_target
+        base_height_tolerance = 0.05  # meters; reward is exp(-(error/tolerance)^2)
+        standing_symmetry_tolerance = 0.1  # radians
 
     class scaling(Go2Cfg.scaling):
         # Canonical RobotLayout order is FL, FR, RL, RR, with
@@ -103,7 +105,7 @@ class Go2TrotCfg(Go2Cfg):
         dof_pos = 4 * [1.0472, 2.53075, 0.94247]
         dof_pos_obs = dof_pos
         # Residual actions are radians per policy unit, not joint ranges.
-        dof_pos_target = 12 * [0.25]
+        dof_pos_target = [0.5 * x for x in dof_pos]
         tau_ff = 4 * [23.7, 23.7, 45.43]
 
 
@@ -177,7 +179,8 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 unwanted_motion = 2.0
                 residual_motion = 0.5
                 swing_contact = 1.25
-                feet_slip = 1.0
+                feet_slip = 1.0  # function already returns a negative penalty
+                standing_symmetry = 0.5
 
             class termination_weight:
                 termination = 2.0

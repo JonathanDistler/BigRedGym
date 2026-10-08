@@ -27,27 +27,12 @@ class Go2Trot(Go2):
         )
         self.gait_reference = torch.zeros_like(self.dof_pos_target)
         foot_names = self.robot_layout.body_groups["feet"]
+        # added this new functionality 
         phase_offsets = self.cfg.control.gait_phase_offsets
-        self._gait_phase_offsets = (
-            2
-            * torch.pi
-            * torch.tensor(
-                [phase_offsets[name] for name in foot_names],
-                dtype=torch.float,
-                device=self.device,
-            )
-        )
+        self._gait_phase_offsets = (2 * torch.pi * torch.tensor( [phase_offsets[name] for name in foot_names], dtype=torch.float,device=self.device,))
         self._gait_dof_phase_offsets = self._gait_phase_offsets.repeat_interleave(3)
-        self._gait_joint_offsets = torch.tensor(
-            self.cfg.control.gait_joint_offsets,
-            dtype=torch.float,
-            device=self.device,
-        )
-        self._gait_joint_amplitudes = torch.tensor(
-            self.cfg.control.gait_joint_amplitudes,
-            dtype=torch.float,
-            device=self.device,
-        )
+        self._gait_joint_offsets = torch.tensor(self.cfg.control.gait_joint_offsets, dtype=torch.float, device=self.device,)
+        self._gait_joint_amplitudes = torch.tensor(self.cfg.control.gait_joint_amplitudes, dtype=torch.float, device=self.device,)
         self._update_phase_observation()
         self._update_gait_reference()
 
@@ -64,13 +49,10 @@ class Go2Trot(Go2):
         )
         leg_length = getattr(self.cfg.control, "standing_leg_length", None)
         if leg_length is not None:
-            # Symmetric thigh/calf posture keeps feet beneath the hips as
-            # height changes. The policy supplies balance residuals around it.
+            # Symmetric thigh/calf posture keeps feet beneath the hips 
             standing = self._standing_posture()
-            # Height remains controllable during locomotion, too.
-            self.gait_reference[:] = standing + blend * (
-                self.gait_reference - self._gait_joint_offsets
-            )
+            # Height remains controllable during locomotion, too
+            self.gait_reference[:] = standing + blend * ( self.gait_reference - self._gait_joint_offsets)
 
     def _locomotion_blend(self):
         # Older saved configs retain their original reference behavior.
@@ -190,10 +172,8 @@ class Go2Trot(Go2):
 
     def _advance_phase(self):
         # phase_frequency is in cycles/s; _post_physics_step runs once per
-        # physics substep, so convert cycles to radians and use the simulation dt.
-        self.phase.add_(
-            2 * torch.pi * self.dt * self.phase_frequency / self.cfg.control.decimation
-        ).remainder_(2 * torch.pi)
+        # physics substep, so convert cycles to radians and use the simulation dt
+        self.phase.add_(2 * torch.pi * self.dt * self.phase_frequency / self.cfg.control.decimation).remainder_(2 * torch.pi)
 
     def _post_decimation_step(self):
         super()._post_decimation_step()
@@ -234,6 +214,19 @@ class Go2Trot(Go2):
             -torch.mean(torch.relu(-phase) * self._foot_contact_strength(), dim=1)
             * self._locomotion_blend()
         )
+
+    def _reward_standing_symmetry(self):
+        """Reward mirrored front and rear pairs independently while standing."""
+        # Canonical actuated order: FL, FR, RL, RR; hip, thigh, calf.
+        joints = self.dof_pos.index_select(1, self.actuated_dof_indices).reshape(
+            self.num_envs, 4, 3
+        )
+        # Hip abduction changes sign under reflection; thigh/calf do not.
+        mirror = joints.new_tensor([-1.0, 1.0, 1.0])
+        pair_error = joints[:, [0, 2]] - mirror * joints[:, [1, 3]]
+        tolerance = self.cfg.reward_settings.standing_symmetry_tolerance
+        pair_rewards = torch.exp(-(pair_error / tolerance).square().mean(dim=2))
+        return pair_rewards.mean(dim=1) * (1.0 - self._locomotion_blend())
 
     def _reward_feet_slip(self):
         """Penalize horizontal motion only for feet carrying contact load."""

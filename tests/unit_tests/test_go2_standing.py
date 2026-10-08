@@ -82,6 +82,19 @@ def test_moving_height_command_changes_reference_without_changing_gait():
     assert task.gait_reference[2, 2] > before[2]
 
 
+def test_standing_symmetry_allows_different_front_and_rear_postures():
+    task = standing_task()
+    task.actuated_dof_indices = torch.arange(12)
+    task.dof_pos = torch.tensor(
+        [[0.1, 0.6, -1.2, -0.1, 0.6, -1.2,
+          0.2, 0.8, -1.6, -0.2, 0.8, -1.6]]
+    ).repeat(3, 1)
+    torch.testing.assert_close(task._reward_standing_symmetry(), torch.tensor([1., 1., 0.]))
+    task.dof_pos[0, 4] += 0.2
+    assert task._reward_standing_symmetry()[0] < 1
+    assert task._reward_standing_symmetry()[1] == 1
+
+
 def test_motion_penalty_tracks_command_and_ignores_requested_vertical_motion():
     task = standing_task()
     task.base_lin_vel = torch.zeros(3, 3)

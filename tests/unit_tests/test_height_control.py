@@ -55,9 +55,28 @@ def test_height_reward_tracks_target_not_fixed_reference(task_class):
         {"Go2": Go2, "Go2Trot": Go2Trot}[task_class]
     )
     task.root_states = torch.zeros(3, 13)
+    from gym.envs.go2.go2_config import Go2Cfg
+    from gym.envs.go2.go2trot_config import Go2TrotCfg
+
+    task.cfg = {"Go2": Go2Cfg, "Go2Trot": Go2TrotCfg}[task_class]()
     task.root_states[:, 2] = torch.tensor([0.30, 0.375, 0.45])
     task.commands = torch.zeros(3, 4)
     task.commands[:, 3] = task.root_states[:, 2]
     torch.testing.assert_close(task._reward_tracking_base_height(), torch.ones(3))
     task.commands[:, 3] += 0.1
     assert torch.all(task._reward_tracking_base_height() < 0.5)
+
+
+def test_trot_height_reward_uses_five_centimeter_tolerance():
+    from gym.envs.go2.go2trot import Go2Trot
+    from gym.envs.go2.go2trot_config import Go2TrotCfg
+
+    task = Go2Trot.__new__(Go2Trot)
+    task.cfg = Go2TrotCfg()
+    task.root_states = torch.zeros(3, 13)
+    task.root_states[:, 2] = 0.35
+    task.commands = torch.zeros(3, 4)
+    task.commands[:, 3] = torch.tensor([0.35, 0.40, 0.45])
+    torch.testing.assert_close(
+        task._reward_tracking_base_height(), torch.exp(-torch.tensor([0., 1., 4.]))
+    )

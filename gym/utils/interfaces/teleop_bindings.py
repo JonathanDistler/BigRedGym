@@ -154,10 +154,6 @@ class TeleopCommands:
         else:
             raise ValueError(f"unknown teleop action {action!r}")
 
-        # Debug height control only when the height command exists
-        if c.shape[1] > 3 and action in ("up", "down"):
-            print(f"Action: {action}, Desired height: {c[0, 3].item():.3f} m")
-
     def print_help(self, viewer_name: str) -> None:
         print("______________________________________________________________")
         print(f"Keyboard teleop ({viewer_name})")
