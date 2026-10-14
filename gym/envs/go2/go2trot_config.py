@@ -69,7 +69,7 @@ class Go2TrotCfg(Go2Cfg):
 
     class push_robots(Go2Cfg.push_robots):
         toggle = True
-        interval_s = 10 # changed this to 10s, so it is more "on policy"
+        interval_s = 20 # changed this to 10s, so it is more "on policy"
 
     class domain_randomization(Go2Cfg.domain_randomization):
         class startup(Go2Cfg.domain_randomization.startup):

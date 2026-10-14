@@ -236,7 +236,7 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 min_base_height = 0.0
                 action_rate = 1.0
                 action_rate2 = 0.1
-                stand_still = 0.0
+                stand_still = .5 #had previously been 0.0
                 dof_pos_limits = 0.0
                 feet_contact_forces = .2 #had originally been 0
                 dof_near_home = 0.0

@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import random
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 import torch
 
@@ -148,17 +149,51 @@ def setup(args):
     runner.switch_to_eval()
     return env, runner
 
-
 def play(env, runner):
+    desired_height = []
+    actual_height = []
+    delta_height = []
+    time = []
+    track_height = (
+        hasattr(env, "commands")
+        and env.commands.shape[1] > 3
+        and hasattr(env, "root_states")
+    )
     n_steps = 10 * int(env.max_episode_length)
-    for _ in range(n_steps):
-        runner.set_actions(
-            runner.actor_cfg["actions"],
-            runner.get_inference_actions(),
-            runner.actor_cfg["disable_actions"],
-        )
-        env.step()
-        env.check_exit()
+    try:
+        for t in range(n_steps):
+            runner.set_actions(
+                runner.actor_cfg["actions"],
+                runner.get_inference_actions(),
+                runner.actor_cfg["disable_actions"],
+            )
+            # not necessarily a function for other robots aside from dog
+            if track_height:
+                desired_height_val = env.commands[0, 3].item()
+            env.step()
+            if track_height:
+                time.append((t + 1) * env.dt)
+                desired_height.append(desired_height_val)
+                actual_height_val = env.root_states[0, 2].item()
+                actual_height.append(actual_height_val)
+                delta_height.append(desired_height_val - actual_height_val)
+            env.check_exit()
+    finally:
+        # was getting errors when shutting down - had to use codex for this
+        if time:
+            fig, ax = plt.subplots()
+            ax.plot(time, desired_height, label="Goal height")
+            ax.plot(time, actual_height, label="Actual height")
+            ax.plot(time, delta_height, label="Difference between Goal and Actual Height")
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Height (m)")
+            ax.legend()
+            ax.grid(True)
+            fig.tight_layout()
+            output_path = Path("graph_output/height_tracking.png").resolve()
+            fig.savefig(output_path, dpi=300)
+            plt.close(fig)
+            print(f"Saved height tracking plot: {output_path}")
 
 
 if __name__ == "__main__":
