@@ -92,7 +92,7 @@ files that cannot be committed to this repository.
 Place these files under `thirdparty/vlearn/` as described in
 [`thirdparty/README.md`](../thirdparty/README.md):
 
-- `vlearn-0.3.14+cu130-cp311-cp311-linux_x86_64.whl`
+- `vlearn-0.3.15+cu130-cp311-cp311-linux_x86_64.whl`
 - `License.key`
 - `TurboActivate.dat`
 
@@ -143,7 +143,13 @@ SDK is elsewhere, set `asset.vsim_visual_mesh_dir` in the Go2 config to its
 `assets/go2/assets` directory. The wheel alone does not include these meshes.
 VSim substitutes these visuals before converting our URDF; joints, collisions,
 and inertias still come from our robot, not the vendor's `go2_og.vsim`.
-MuJoCo does not need this directory.
+The MuJoCo CPU viewer uses the same OBJ files, with material colors read from
+`thirdparty/vlearn/assets/go2/go2.xml`. `asset.mujoco_visual_model` selects this
+visual donor; its dynamics are ignored. Robot collision shapes are hidden in
+viewer geometry group 3, while the detailed visual surfaces remain visible.
+Headless MuJoCo CPU and Warp do not require these assets. An older saved config
+used with `--original_cfg` needs the `mujoco_visual_model` field added to its
+asset config to enable the detailed visuals; `None` keeps the basic rendering.
 
 ### Optional Unitree Go2 deployment setup
 
@@ -240,6 +246,14 @@ The experiment defaults to the task's current `experiment_name`; use
 such as `--num_envs`, `--seed`, or `--max_iterations`, are applied after the
 saved configs are loaded.
 
+The MuJoCo CPU viewer paces simulation to real time by default: one simulated
+second takes at least one wall-clock second, including policy and rendering
+work. It accounts for all physics substeps between frames and resumes without
+fast catch-up after a slow frame. No playback flag is needed. Headless runs
+remain unrestricted; backend callers can opt out with
+`render(sync_frame_time=False)`. This changes wall-clock pacing, not the physics
+timestep or control frequency. Workloads slower than real time remain slower.
+
 Only the saved config modules and their saved config dependencies are loaded.
 The current task implementation, learning stack, and selected physics backend
 remain active. This makes the option suitable for recent compatible runs while
@@ -291,8 +305,11 @@ CI runs the portable and colocated suites, Ruff, and a package build; it has no
 PPO update/checkpoint or pendulum-control smoke test. Passing native physics or
 configuration tests does not establish policy learning quality or checkpoint
 resume correctness. Independent storage/GAE, timeout handling, and normalizer
-update/freeze/save/load coverage remain areas for review. The strict deployment
-observation-parity expected failure remains explicit debt.
+update/freeze/save/load coverage remain areas for review. Deployment utility
+tests use synthetic messages and check static-posture offsets, unrestricted
+position targets, and the active gait-frequency observation. The
+simulation/deployment observation-parity test has been removed; these utility
+checks do not establish hardware behavior or checkpoint compatibility.
 
 VSim backend code, its optional dependency extra, and marked tests remain, but
 the local test launcher and support workflow are deferred. Hosted CI does not
@@ -305,7 +322,69 @@ properties and link-local visual frames, including preprocessing before conversi
 Those tests use a stand-in converter; they do not establish native VSim import
 or rendering correctness.
 
-Standalone policy evaluators, comparison reports, benchmark/profile tools, and
+Go2Trot has a focused performance gate in `scripts/evaluate_go2trot.py`:
+
+```bash
+uv run --frozen --extra vsim --env-file .env.vsim scripts/evaluate_go2trot.py \
+  --backend vsim --device cuda:0 --load_run RUN --checkpoint 550 \
+  --original_cfg --output logs/go2trot-performance.json --check
+```
+
+It evaluates deterministic actions on flat ground with no pushes or domain
+randomization, using ten fixed velocity commands (m/s and rad/s), each at gait
+frequencies of 1, 2, and 3 Hz. Four replicas per case run for eight seconds; the
+first two seconds are excluded from steady-state metrics. Failures remain in
+the survival denominator and are never reset into successful episodes. JSON
+records checkpoint hash, source revision/worktree status, resolved configs,
+commands, gait frequencies, bounds, and every case's result. `--check` fails
+if any case misses a bound. This is an explicit local learning-quality check;
+hosted CI tests its metric definitions with synthetic counterexamples and does
+not train or download a checkpoint.
+
+The gate measures planar velocity RMSE, yaw-rate RMSE, target/velocity jitter
+above 10 Hz (beyond the first three gait harmonics), target clipping, swing-phase
+load, total foot support relative to body weight, contact duty, and each foot's
+load share over complete oscillator strides.
+Consecutive target changes and joint acceleration are also reported; they
+include legitimate stride motion, so they are not themselves jitter gates. Equal
+whole-run averages cannot hide alternating overloaded strides. Bounds are
+initial engineering acceptance criteria, not guarantees for hardware or other
+backends. Old policies need their saved observation/action scaling; changing
+action scales at playback changes the controller. Config snapshots predating
+the current backend config schema may require migration before evaluation.
+
+Go2Trot now uses its sinusoidal gait reference only in `reference_traj`, a
+joint-position tracking reward with weight 3.0 and the same squared-exponential
+plus absolute-error form as MiniCheetahRef. PD targets are policy offsets from
+the static nominal posture (hip 0, thigh 0.96, calf -1.36 radians). Reference
+tracking stays active at zero commands, consistent with the existing trot
+contact rewards. Phase observations and frequency remain available to the
+policy. This changes action and joint-observation semantics: train a fresh
+policy. Loading an old config alone does not restore the previous controller's
+additive gait reference. Learning quality for this formulation is unvalidated.
+The deployment utilities use the same static-posture action convention, without
+an additive gait reference or position-target clipping. Their frequency
+observation reads the active controller frequency used by the phase clock.
+Hardware validation of this formulation remains outstanding.
+
+The earlier additive-reference tuning checkpoint is provisional: reduced
+residual action scales,
+revised action-rate and yaw-tracking rewards, and revised command sampling
+improve some fixed-command cases, but
+turning, fast tracking, and jitter still miss acceptance bounds. Observation
+scaling and the phase observations remain unchanged. The action-scale increase
+dates to commit `23c5465`; the later config refactors preserved those values.
+
+VSim contact sensors now explicitly request `LOCAL` before rotating forces by
+the link orientation. Applying that rotation to `ENVIRONMENT` results gave
+incorrect world forces, corrupting gait rewards and load metrics. The native
+standing-Go2 regression checks gravity balance at four yaw angles and fails
+with the previous frame selection. Policies from the tuning trials were trained
+before this fix; their corrected-force evaluations do not establish successful
+learning with the repaired reward signal. Retraining remains necessary. Older
+reports from before the fix are invalid evidence for contact-load quality.
+
+General-purpose policy comparison reports, benchmark/profile tools, and
 their analysis helpers are no longer included. Training, playback,
 `--original_cfg`, and ordinary W&B logging remain available. The retired pendulum
 calibration failed its learning threshold; its removal supplies no passing

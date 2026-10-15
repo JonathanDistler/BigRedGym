@@ -140,7 +140,7 @@ def _(BRANCH, ENV, REPO, REPO_URL, subprocess, textwrap):
         git log -1 --format='Training checkout: %H %s'
         uv python install 3.11          # pyproject pins requires-python == 3.11.*
         # --extra gpu pulls mujoco-warp (CUDA); --no-dev skips pytest/ruff/marimo.
-        uv sync --frozen --extra gpu --no-dev || uv sync --extra gpu --no-dev
+        uv sync --frozen --extra gpu --no-dev
     """)
     # check=True: this ensures that the environment was built properly, so we know we're good to proceed.
     subprocess.run(["bash", "-c", _script], check=True, env=ENV)
