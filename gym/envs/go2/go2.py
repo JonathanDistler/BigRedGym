@@ -10,6 +10,44 @@ class Go2(LeggedRobot):
     def __init__(self, cfg, device, headless, backend):
         super().__init__(cfg, device, headless, backend)
 
+    def _standing_posture(self):
+        from gym.envs.go2.go2_config import LEG_LENGTH, FOOT_RADIUS
+
+        extension = (self.commands[:, 3:4] - FOOT_RADIUS) / (2 * LEG_LENGTH)
+        thigh = torch.acos(extension.clamp(0.0, 1.0))
+        return torch.cat((torch.zeros_like(thigh), thigh, -2 * thigh), dim=1).repeat(
+            1, 4
+        )
+
+    def _compute_torques(self):
+        # The learned action is a balance residual around the requested height.
+        pos = self.dof_pos.index_select(1, self.actuated_dof_indices)
+        vel = self.dof_vel.index_select(1, self.actuated_dof_indices)
+        target = self._standing_posture() + self.dof_pos_target
+        torques = self.p_gains * (target - pos)
+        torques += self.d_gains * (self.dof_vel_target - vel) + self.tau_ff
+        return torques.clamp(-self.actuated_torque_limits, self.actuated_torque_limits)
+
+    def _reset_idx(self, reset_mask):
+        super()._reset_idx(reset_mask)
+        self.dof_pos_target[reset_mask] = 0.0
+        self.dof_pos_history[reset_mask] = 0.0
+
+    def _resample_commands(self, command_mask):
+        super()._resample_commands(command_mask)
+        stopped = command_mask & (
+            torch.rand(self.num_envs, device=self.device)
+            < getattr(self.cfg.commands, "standing_probability", 0.0)
+        )
+        self.commands[stopped, :3] = 0.0
+
+    def _reward_unwanted_motion(self):
+        error = (self.base_lin_vel[:, :2] - self.commands[:, :2]).square().sum(dim=1)
+        return -error - (self.base_ang_vel[:, 2] - self.commands[:, 2]).square()
+
+    def _reward_residual_motion(self):
+        return -self.dof_pos_target.square().mean(dim=1)
+
     def _reward_lin_vel_z(self):
         """Penalize z axis base linear velocity with squared exp"""
         return self._sqrdexp(self.base_lin_vel[:, 2] / self.scales["base_lin_vel"])

@@ -3,7 +3,22 @@ from gym.envs.base.legged_robot_config import (
     LeggedRobotRunnerCfg,
 )
 
-BASE_HEIGHT_REF = 0.4
+# Read the physical leg dimensions from the robot used by both backends.
+import math
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+from gym import GYM_ROOT_DIR
+
+_urdf = ET.parse(Path(GYM_ROOT_DIR) / "resources/robots/go2/urdf/go2.urdf")
+LEG_LENGTH = abs(
+    float(_urdf.find(".//joint[@name='FL_calf_joint']/origin").get("xyz").split()[2])
+)
+FOOT_RADIUS = float(
+    _urdf.find(".//link[@name='FL_foot']/collision/geometry/sphere").get("radius")
+)
+STANDING_THIGH = 0.58
+BASE_HEIGHT_REF = 2 * LEG_LENGTH * math.cos(STANDING_THIGH) + FOOT_RADIUS
 
 GO2_DOF_NAMES = [
     "FL_hip_joint",
@@ -33,6 +48,9 @@ class Go2Cfg(LeggedRobotCfg):
         num_envs = 2**12
         num_actuators = 12
         episode_length_s = 3
+        # A collapsed robot can rest on its legs without torso contact.
+        # Keep this below the lowest requested standing height (0.30 m).
+        min_base_height = 0.20
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = "plane"
@@ -40,8 +58,8 @@ class Go2Cfg(LeggedRobotCfg):
     class init_state(LeggedRobotCfg.init_state):
         default_joint_angles = {
             "hip": 0.0,
-            "thigh": 0.66,
-            "calf": -1.36,
+            "thigh": STANDING_THIGH,
+            "calf": -2 * STANDING_THIGH,
         }
 
         # * reset setup chooses how the initial conditions are chosen.
@@ -50,7 +68,7 @@ class Go2Cfg(LeggedRobotCfg):
         reset_mode = "reset_to_range"
 
         # * default COM for basic initialization
-        pos = [0.0, 0.0, 0.40]  # x,y,z [m]
+        pos = [0.0, 0.0, BASE_HEIGHT_REF + 0.005]  # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
@@ -58,22 +76,22 @@ class Go2Cfg(LeggedRobotCfg):
         # * initialization for random range setup
         dof_pos_range = {
             "hip": [-0.01, 0.01],
-            "thigh": [0.65, 0.67],
-            "calf": [-1.37, -1.35],
+            "thigh": [STANDING_THIGH - 0.01, STANDING_THIGH + 0.01],
+            "calf": [-2 * STANDING_THIGH - 0.01, -2 * STANDING_THIGH + 0.01],
         }
         dof_vel_range = {"hip": [0.0, 0.0], "thigh": [0.0, 0.0], "calf": [0.0, 0.0]}
         root_pos_range = [
             [0.0, 0.0],  # x
             [0.0, 0.0],  # y
-            [0.40, 0.40],  # z
+            [BASE_HEIGHT_REF + 0.005, BASE_HEIGHT_REF + 0.005],  # z
             [0.0, 0.0],  # roll
             [0.0, 0.0],  # pitch
             [0.0, 0.0],  # yaw
         ]
         root_vel_range = [
-            [-0.5, 2.0],  # x
+            [0.0, 0.0],  # x
             [0.0, 0.0],  # y
-            [-0.05, 0.05],  # z
+            [0.0, 0.0],  # z
             [0.0, 0.0],  # roll
             [0.0, 0.0],  # pitch
             [0.0, 0.0],  # yaw
@@ -81,19 +99,24 @@ class Go2Cfg(LeggedRobotCfg):
 
     class control(LeggedRobotCfg.control):
         # * PD Drive parameters:
-        stiffness = {"hip": 20.0, "thigh": 20.0, "calf": 20.0}
-        damping = {"hip": 0.5, "thigh": 0.5, "calf": 0.5}
+        stiffness = {"hip": 60.0, "thigh": 60.0, "calf": 60.0}
+        damping = {"hip": 3.0, "thigh": 3.0, "calf": 3.0}
         ctrl_frequency = 100
-        desired_sim_frequency = 100
+        desired_sim_frequency = 500
 
     class commands:
         # * time before command are changed[s]
-        resampling_time = 3.0
+        resampling_time = 1.0
+        standing_probability = 0.5
 
         class ranges:
             lin_vel_x = [-2.0, 3.0]  # min max [m/s]
             lin_vel_y = 1.0  # max [m/s]
             yaw_vel = 3  # max [rad/s]
+
+            # Leave knee flexion at the upper target rather than demanding
+            # nearly straight legs (two 0.213 m links plus the foot radius).
+            base_height = [0.28, 0.41]
 
     class push_robots:
         toggle = False
@@ -116,6 +139,8 @@ class Go2Cfg(LeggedRobotCfg):
         file = "{GYM_ROOT_DIR}/resources/robots/" + "go2/urdf/go2.urdf"
         # Use the SDK's OBJ visuals; keep our URDF's complete physical model.
         vsim_visual_mesh_dir = "{GYM_ROOT_DIR}/thirdparty/vlearn/assets/go2/assets"
+        mujoco_visual_model = None
+        #mujoco_visual_model = "{GYM_ROOT_DIR}/thirdparty/vlearn/assets/go2/go2.xml"
         foot_name = "foot"
         penalize_contacts_on = ["calf"]
         terminate_after_contacts_on = ["base"]
@@ -142,14 +167,15 @@ class Go2Cfg(LeggedRobotCfg):
 
     class scaling(LeggedRobotCfg.scaling):
         base_ang_vel = 0.3
-        base_lin_vel = BASE_HEIGHT_REF
+        base_lin_vel = 3.0
         dof_vel = 4 * [2.0, 2.0, 4.0]
         base_height = 0.3
         dof_pos = 4 * [1.0472, 2.53075, 0.94247]
         dof_pos_obs = dof_pos
-        dof_pos_target = [0.5 * x for x in dof_pos]
+        dof_pos_target = 12 * [0.25]
         tau_ff = 4 * [23.7, 23.7, 45.43]
-        commands = [3, 1, 3]
+        # Observations divide by these values; scaling does not clip commands.
+        commands = [3.0, 1.0, 3.0, 0.40]
 
 
 class Go2RunnerCfg(LeggedRobotRunnerCfg):
@@ -203,20 +229,25 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 tracking_lin_vel = 4.0
                 tracking_ang_vel = 2.0
                 lin_vel_z = 0.0
-                ang_vel_xy = 0.01
+                ang_vel_xy = 0.5
                 orientation = 1.0
                 torques = 5.0e-6
                 dof_vel = 0.0
-                min_base_height = 1.5
-                action_rate = 0.1
-                action_rate2 = 0.01
-                stand_still = 0.0
+                # Command tracking replaces the fixed-height objective so
+                # crouching is not penalized for being below 0.40m.
+                min_base_height = 0.0
+                action_rate = 1.0
+                action_rate2 = 0.1
+                stand_still = .5 #had previously been 0.0
                 dof_pos_limits = 0.0
-                feet_contact_forces = 0.0
+                feet_contact_forces = .2 #had originally been 0
                 dof_near_home = 0.0
+                tracking_base_height = 4.0 #had previously been 10 
+                unwanted_motion = 2.0
+                residual_motion = 1 #had previously been .5
 
             class termination_weight:
-                termination = 0.01
+                termination = 2.0
 
     class algorithm(LeggedRobotRunnerCfg.algorithm):
         # Preserve the old runner's collection geometry: it collected one

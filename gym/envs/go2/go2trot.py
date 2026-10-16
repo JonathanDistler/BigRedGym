@@ -3,10 +3,10 @@ import torch
 from gym.utils.sampling import torch_rand_float
 from gym.utils.sampling import masked_update
 
-from gym.envs.base.legged_robot import LeggedRobot
+from gym.envs.go2.go2 import Go2
 
 
-class Go2Trot(LeggedRobot):
+class Go2Trot(Go2):
     def __init__(self, cfg, device, headless, backend):
         super().__init__(cfg, device, headless, backend)
 
@@ -27,27 +27,12 @@ class Go2Trot(LeggedRobot):
         )
         self.gait_reference = torch.zeros_like(self.dof_pos_target)
         foot_names = self.robot_layout.body_groups["feet"]
+        # added this new functionality 
         phase_offsets = self.cfg.control.gait_phase_offsets
-        self._gait_phase_offsets = (
-            2
-            * torch.pi
-            * torch.tensor(
-                [phase_offsets[name] for name in foot_names],
-                dtype=torch.float,
-                device=self.device,
-            )
-        )
+        self._gait_phase_offsets = (2 * torch.pi * torch.tensor( [phase_offsets[name] for name in foot_names], dtype=torch.float,device=self.device,))
         self._gait_dof_phase_offsets = self._gait_phase_offsets.repeat_interleave(3)
-        self._gait_joint_offsets = torch.tensor(
-            self.cfg.control.gait_joint_offsets,
-            dtype=torch.float,
-            device=self.device,
-        )
-        self._gait_joint_amplitudes = torch.tensor(
-            self.cfg.control.gait_joint_amplitudes,
-            dtype=torch.float,
-            device=self.device,
-        )
+        self._gait_joint_offsets = torch.tensor(self.cfg.control.gait_joint_offsets, dtype=torch.float, device=self.device,)
+        self._gait_joint_amplitudes = torch.tensor(self.cfg.control.gait_joint_amplitudes, dtype=torch.float, device=self.device,)
         self._update_phase_observation()
         self._update_gait_reference()
 
@@ -57,10 +42,25 @@ class Go2Trot(LeggedRobot):
 
     def _update_gait_reference(self):
         joint_phase = self.phase + self._gait_dof_phase_offsets.unsqueeze(0)
+        blend = self._locomotion_blend().unsqueeze(1)
         self.gait_reference[:] = (
             self._gait_joint_offsets
             + self._gait_joint_amplitudes * torch.sin(joint_phase)
         )
+        leg_length = getattr(self.cfg.control, "standing_leg_length", None)
+        if leg_length is not None:
+            # Symmetric thigh/calf posture keeps feet beneath the hips 
+            standing = self._standing_posture()
+            # Height remains controllable during locomotion, too
+            self.gait_reference[:] = standing + blend * ( self.gait_reference - self._gait_joint_offsets)
+
+    def _locomotion_blend(self):
+        # Older saved configs retain their original reference behavior.
+        threshold = getattr(self.cfg.control, "standing_command_threshold", None)
+        if threshold is None:
+            return torch.ones(self.num_envs, device=self.device)
+        speed = torch.linalg.vector_norm(self.commands[:, :3], dim=1)
+        return (speed / threshold).clamp(0.0, 1.0)
 
     def _leg_phases(self):
         return torch.remainder(
@@ -70,35 +70,7 @@ class Go2Trot(LeggedRobot):
     def _expected_stance(self):
         return torch.sin(self._leg_phases()) > 0
 
-    def _pre_decimation_step(self):
-        self._update_gait_reference()
-        reference = self.gait_reference + self.default_dof_pos.index_select(
-            1, self.actuated_dof_indices
-        )
-        # Bound the full PD position command. Keep the applied residual in the
-        # task buffer so observations and action-history rewards describe it;
-        # the runner retains its separate raw samples for PPO likelihoods.
-        self.dof_pos_target.clamp_(
-            min=self._actuated_dof_pos_limits[:, 0] - reference,
-            max=self._actuated_dof_pos_limits[:, 1] - reference,
-        )
-
-    def _compute_torques(self):
-        pos = self.dof_pos.index_select(1, self.actuated_dof_indices)
-        vel = self.dof_vel.index_select(1, self.actuated_dof_indices)
-        default_pos = self.default_dof_pos.index_select(1, self.actuated_dof_indices)
-        torques = (
-            self.p_gains
-            * (self.gait_reference + self.dof_pos_target + default_pos - pos)
-            + self.d_gains * (self.dof_vel_target - vel)
-            + self.tau_ff
-        )
-        return torch.clip(
-            torques, -self.actuated_torque_limits, self.actuated_torque_limits
-        ).view(self.torques.shape)
-
     def _reset_system(self, reset_mask):
-        super()._reset_system(reset_mask)
         phase = torch_rand_float(
             0,
             2 * torch.pi,
@@ -113,6 +85,17 @@ class Go2Trot(LeggedRobot):
         )
         masked_update(self.phase, phase, reset_mask)
         masked_update(self.phase_frequency, phase_frequency, reset_mask)
+        self._update_gait_reference()
+        super()._reset_system(reset_mask)
+
+    def reset_to_basic(self, reset_mask):
+        super().reset_to_basic(reset_mask)
+        # default_dof_pos is the residual origin, not the physical standing
+        # posture. Start at the controller's reference for the sampled phase.
+        posture = self.default_dof_pos.expand(self.num_envs, -1).clone()
+        posture[:, self.actuated_dof_indices] += self.gait_reference
+        posture.clamp_(min=self.dof_pos_limits[:, 0], max=self.dof_pos_limits[:, 1])
+        masked_update(self.dof_pos, posture, reset_mask)
 
     def _resample_commands(self, command_mask):
         super()._resample_commands(command_mask)
@@ -135,15 +118,15 @@ class Go2Trot(LeggedRobot):
             drop = command_mask.unsqueeze(1) & (
                 torch.rand(self.num_envs, 1, device=self.device) >= 0.8
             )
-            self.commands[:, 1:].masked_fill_(drop, 0.0)
+            self.commands[:, 1:3].masked_fill_(drop, 0.0)
             drop = command_mask.unsqueeze(1) & (
                 torch.rand(self.num_envs, 1, device=self.device) >= 0.8
             )
             self.commands[:, :2].masked_fill_(drop, 0.0)
             drop = command_mask.unsqueeze(1) & (
-                torch.rand(self.num_envs, 1, device=self.device) >= 0.9
+                torch.rand(self.num_envs, 1, device=self.device) >= 0.8
             )
-            self.commands.masked_fill_(drop, 0.0)
+            self.commands[:, :3].masked_fill_(drop, 0.0)
 
     def _reset_idx(self, reset_mask):
         super()._reset_idx(reset_mask)
@@ -162,14 +145,13 @@ class Go2Trot(LeggedRobot):
 
     def _advance_phase(self):
         # phase_frequency is in cycles/s; _post_physics_step runs once per
-        # physics substep, so convert cycles to radians and use the simulation dt.
-        self.phase.add_(
-            2 * torch.pi * self.dt * self.phase_frequency / self.cfg.control.decimation
-        ).remainder_(2 * torch.pi)
+        # physics substep, so convert cycles to radians and use the simulation dt
+        self.phase.add_(2 * torch.pi * self.dt * self.phase_frequency / self.cfg.control.decimation).remainder_(2 * torch.pi)
 
     def _post_decimation_step(self):
         super()._post_decimation_step()
         self._update_phase_observation()
+        self._update_gait_reference()
 
     def _foot_contact_strength(self):
         """Map upward foot load smoothly from zero to nominal body-weight."""
@@ -194,12 +176,46 @@ class Go2Trot(LeggedRobot):
             2.0 * torch.sqrt(torch.prod(stance_strength, dim=1)),
             max=1.0,
         )
-        return torch.relu(phase).amax(dim=1) * paired_support
+        moving = torch.relu(phase).amax(dim=1) * paired_support
+        standing = torch.clamp(4.0 * contact_strength.amin(dim=1), max=1.0)
+        blend = self._locomotion_blend()
+        return blend * moving + (1.0 - blend) * standing
 
     def _reward_swing_contact(self):
         """Penalize load carried by feet during their scheduled swing phase."""
         phase = torch.sin(self._leg_phases())
-        return -torch.mean(torch.relu(-phase) * self._foot_contact_strength(), dim=1)
+        return (
+            -torch.mean(torch.relu(-phase) * self._foot_contact_strength(), dim=1)
+            * self._locomotion_blend()
+        )
+
+    def _reward_standing_symmetry(self):
+        """Reward mirrored front and rear pairs independently while standing."""
+        # Canonical actuated order: FL, FR, RL, RR; hip, thigh, calf.
+        joints = self.dof_pos.index_select(1, self.actuated_dof_indices).reshape(
+            self.num_envs, 4, 3
+        )
+        # Hip abduction changes sign under reflection; thigh/calf do not.
+        mirror = joints.new_tensor([-1.0, 1.0, 1.0])
+        pair_error = joints[:, [0, 2]] - mirror * joints[:, [1, 3]]
+        tolerance = self.cfg.reward_settings.standing_symmetry_tolerance
+        pair_rewards = torch.exp(-(pair_error / tolerance).square().mean(dim=2))
+        return pair_rewards.mean(dim=1) * (1.0 - self._locomotion_blend())
+
+    def _reward_feet_slip(self):
+        """Penalize horizontal motion only for feet carrying contact load."""
+        contact = self.contact_forces[:, self.feet_indices, 2] > 1.0
+        speed_squared = (
+            self._rigid_body_lin_vel[:, self.feet_indices, :2].square().sum(dim=2)
+        )
+        return -(speed_squared * contact).sum(dim=1)
+
+    def _reward_reference_traj(self):
+        pos = self.dof_pos.index_select(1, self.actuated_dof_indices)
+        default_pos = self.default_dof_pos.index_select(1, self.actuated_dof_indices)
+        scale = self.scales["dof_pos"].index_select(0, self.actuated_dof_indices)
+        error = (self.gait_reference + default_pos - pos) / scale
+        return (self._sqrdexp(error) - 0.2 * error.abs()).mean(dim=1)
 
     def _reward_lin_vel_z(self):
         """Penalize z axis base linear velocity with squared exp"""
@@ -236,9 +252,7 @@ class Go2Trot(LeggedRobot):
 
     def _reward_tracking_ang_vel(self):
         """Tracking of angular velocity commands (yaw)"""
-        ang_vel_error = torch.square(
-            (self.commands[:, 2] - self.base_ang_vel[:, 2]) / 2.5
-        )
+        ang_vel_error = (self.commands[:, 2] - self.base_ang_vel[:, 2]) / 2.5
         return self._sqrdexp(ang_vel_error)
 
     def _reward_dof_vel(self):

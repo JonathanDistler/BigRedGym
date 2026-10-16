@@ -10,11 +10,14 @@ Supports MuJoCo CPU/Warp and optional VSim checkpoints.
 """
 
 import argparse
+import hashlib
 import random
+from pathlib import Path
+import matplotlib.pyplot as plt
 
 import torch
 
-from gym.utils.helpers import set_seed
+from gym.utils.helpers import get_load_path, set_seed
 from gym.utils.task_registry import task_registry
 
 
@@ -113,6 +116,23 @@ def setup(args):
     train_cfg.runner.checkpoint = args.checkpoint
     train_cfg.logging.enable_local_saving = False
 
+    checkpoint_path = Path(
+        get_load_path(
+            train_cfg.runner.experiment_name,
+            train_cfg.runner.load_run,
+            train_cfg.runner.checkpoint,
+        )
+    )
+    digest = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    print(f"Playback checkpoint: {checkpoint_path}\nSHA256: {digest}")
+    if checkpoint_path.stem == "model_0":
+        print("WARNING: model_0 is the initial policy, before any training updates.")
+    if not args.original_cfg:
+        print(
+            "Using current local configs. Use --original_cfg with the complete "
+            "downloaded run to reproduce its training configuration."
+        )
+
     task_registry.convert_frequencies_to_params(env_cfg, train_cfg)
     task_registry.set_log_dir_name(train_cfg)
     set_seed(env_cfg.seed)
@@ -129,17 +149,51 @@ def setup(args):
     runner.switch_to_eval()
     return env, runner
 
-
 def play(env, runner):
+    desired_height = []
+    actual_height = []
+    delta_height = []
+    time = []
+    track_height = (
+        hasattr(env, "commands")
+        and env.commands.shape[1] > 3
+        and hasattr(env, "root_states")
+    )
     n_steps = 10 * int(env.max_episode_length)
-    for _ in range(n_steps):
-        runner.set_actions(
-            runner.actor_cfg["actions"],
-            runner.get_inference_actions(),
-            runner.actor_cfg["disable_actions"],
-        )
-        env.step()
-        env.check_exit()
+    try:
+        for t in range(n_steps):
+            runner.set_actions(
+                runner.actor_cfg["actions"],
+                runner.get_inference_actions(),
+                runner.actor_cfg["disable_actions"],
+            )
+            # not necessarily a function for other robots aside from dog
+            if track_height:
+                desired_height_val = env.commands[0, 3].item()
+            env.step()
+            if track_height:
+                time.append((t + 1) * env.dt)
+                desired_height.append(desired_height_val)
+                actual_height_val = env.root_states[0, 2].item()
+                actual_height.append(actual_height_val)
+                delta_height.append(desired_height_val - actual_height_val)
+            env.check_exit()
+    finally:
+        # was getting errors when shutting down - had to use codex for this
+        if time:
+            fig, ax = plt.subplots()
+            ax.plot(time, desired_height, label="Goal height")
+            ax.plot(time, actual_height, label="Actual height")
+            ax.plot(time, delta_height, label="Difference between Goal and Actual Height")
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Height (m)")
+            ax.legend()
+            ax.grid(True)
+            fig.tight_layout()
+            output_path = Path("graph_output/height_tracking.png").resolve()
+            fig.savefig(output_path, dpi=300)
+            plt.close(fig)
+            print(f"Saved height tracking plot: {output_path}")
 
 
 if __name__ == "__main__":
