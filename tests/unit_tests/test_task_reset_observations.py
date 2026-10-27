@@ -98,8 +98,9 @@ def test_runner_observations_include_current_gait_phase_and_frequency(task):
             dim=-1,
         )
         for names, size in (
-            (runner_cfg.actor.obs, 48),
-            (runner_cfg.critic.obs, 52),
+            # Four commands include the desired base height.
+            (runner_cfg.actor.obs, 49),
+            (runner_cfg.critic.obs, 53),
         ):
             observation = env.get_states(names)
             assert observation.shape == (env.num_envs, size)

@@ -17,6 +17,21 @@ LEG_LENGTH = abs(
 FOOT_RADIUS = float(
     _urdf.find(".//link[@name='FL_foot']/collision/geometry/sphere").get("radius")
 )
+# Origins used by the handstand reset's analytic foot placement.
+GO2_HIP_X = tuple(
+    float(_urdf.find(f".//joint[@name='{leg}_hip_joint']/origin").get("xyz").split()[0])
+    for leg in ("FL", "FR", "RL", "RR")
+)
+GO2_FOOT_Y = tuple(
+    sum(
+        float(
+            _urdf.find(f".//joint[@name='{leg}_{joint}_joint']/origin")
+            .get("xyz").split()[1]
+        )
+        for joint in ("hip", "thigh")
+    )
+    for leg in ("FL", "FR", "RL", "RR")
+)
 STANDING_THIGH = 0.58
 BASE_HEIGHT_REF = 2 * LEG_LENGTH * math.cos(STANDING_THIGH) + FOOT_RADIUS
 
@@ -242,7 +257,7 @@ class Go2RunnerCfg(LeggedRobotRunnerCfg):
                 dof_pos_limits = 0.0
                 feet_contact_forces = .2 #had originally been 0
                 dof_near_home = 0.0
-                tracking_base_height = 4.0 #had previously been 10 
+                tracking_base_height = 4.0 #had previously been 10
                 unwanted_motion = 2.0
                 residual_motion = 1 #had previously been .5
 

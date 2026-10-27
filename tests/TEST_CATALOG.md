@@ -91,6 +91,14 @@ early failures, and load that swaps between strides. These are metric tests;
 policy quality requires running `scripts/evaluate_go2trot.py --check` on an
 explicit checkpoint and backend.
 
+`test_go2_handstand.py` checks lean/kick/balance rewards against unsupported,
+single-foot, inverted, folded-leg, and moving counterexamples, plus CPU task
+stepping and selected resets. `test_handstand_curriculum.py` checks every reset
+level against native MuJoCo foot geometry, collision distances, and joint limits;
+it also checks continuous hold timing, promotion eligibility, replay mixtures,
+and curriculum checkpoint restoration after inference-mode stepping. These tests
+establish reset and progression mechanics, not learned handstand performance.
+
 The colocated `gym/envs/go2/test_go2trot.py` also checks consecutive-action
 smoothness and symmetric yaw-error rewards against hand-calculated values.
 

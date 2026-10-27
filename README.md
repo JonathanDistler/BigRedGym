@@ -179,3 +179,115 @@ to view an existing policy.
 
 # Note on AI-generated files
 Some of the code has been worked on by an AI agent, in the case where code segments have been heavily edited by AI, the AI-generated files in [genAI_skills](genAI_skills/) may be of some value in understanding the code, especially [README_MUJOCO.md](genAI_skills/README_MUJOCO.md).
+
+### Go2 handstand primitives
+
+`go2handstand` is a separate experimental task; existing standing and trot rewards
+are unchanged. Start a simulation training run with:
+
+```bash
+uv run --frozen scripts/train.py --task=go2handstand --device=cpu --num_envs=16 --headless
+```
+
+The intended pose is a nose-down vertical torso, supported by both front feet,
+with both rear feet raised and rear knees nearly extended. The task exposes its
+stage to actor and critic. Standing starts use the complete sequence below;
+assisted resets initialize the appropriate kick or balance stage:
+
+1. **Forward lean:** the front-load share `p = front_Fz / total_foot_Fz` earns
+   `exp(-((1-p)/0.25)^2)`, multiplied by forward pitch, two-front-foot support,
+   and `exp(-((total_foot_Fz/body_weight - 1)/0.30)^2)`. Loads use each
+   environment's randomized mass. This rejects flight, single-foot support,
+   and large impact spikes. A score of at least 0.5 for 0.10 s unlocks kick-up.
+2. **Kick-up:** either rear knee approaches -0.95 rad (about 89% two-link reach, within the URDF knee limit),
+   while that foot unloads and lifts 0.12 m above the front feet. A score of at
+   least 0.5 for 0.04 s unlocks balance. This rewards a kick-up posture rather
+   than measuring a propulsive impulse or prescribing a kick velocity.
+3. **Balance:** continuous reward requires front support near one body weight,
+   load sharing across both front feet, unloaded rear feet, a vertical torso,
+   both rear feet elevated at least 0.35 m, rear extension, and low linear and
+   angular velocity. Foot slip, excessive force, body collisions, joint limits,
+   torque, and abrupt action changes remain penalized. Torso contact terminates.
+
+Stage gates are remembered until reset; each reward still evaluates the current
+physical pose. Parameters and weights are in
+`gym/envs/go2/go2handstand_config.py`. This is an initial reward design, not a
+trained or validated handstand policy. The upright orientation, fixed-height,
+locomotion-tracking, and small-residual objectives are omitted for this task.
+
+The default reset curriculum keeps gravity at **9.81 m/s²**. Assistance comes
+from starting closer to the goal; there is no external holding force or gravity
+schedule. Each reset samples joint positions, torso orientation, and small
+angular velocities. Foot placement uses Go2 leg geometry to set the root height
+above the plane, and the initial PD targets match the sampled joint positions.
+
+| Level | Starting torso pitch | Initial training stage |
+|---|---|---|
+| 0 | 90°, ±1° tilt | Balance |
+| 1 | 90°, ±5° tilt and small angular velocity | Balance |
+| 2 | 70°, ±5° tilt | Kick-up |
+| 3 | 45°, ±5° tilt | Kick-up |
+| 4 | 20°, ±5° tilt | Kick-up |
+| 5 | Four-foot standing | Lean forward |
+
+Pitch is measured from horizontal. At levels above zero, 70% of resets sample
+the current level, 20% replay earlier levels, and 10% start from standing.
+A primary episode succeeds after its balance score stays at least 0.5 for
+**two uninterrupted seconds** without a termination. Promotion requires at
+least 70% success in **two consecutive batches of at least 128 completed primary
+episodes each**. Easier replay and standing-mixture episodes do not promote a
+level. Failure keeps the current level; iteration count alone never promotes it.
+The final level retains 20% easier replay and otherwise uses standing starts.
+
+Training prints `[handstand curriculum]` batch results and promotions. Local
+`vitals.jsonl` and W&B (if enabled) include `curriculum/curriculum_level` and
+`curriculum/curriculum_success_rate`. A checkpoint saves the level and promotion
+counters with the policy and optimizers. Resuming restarts episodes from that
+level; transient robot states and exact random-number streams are not restored.
+Set `handstand_curriculum.enabled = False` to train from standing only, or change
+`initial_level` to choose a starting level for a fresh run.
+
+For **MoLab**, use the updated `notebooks/molab_train.py`:
+
+Open [molab](https://molab.marimo.io), upload the notebook, and attach a GPU
+using the notebook's compute settings. Run cells from top to bottom with
+Shift+Enter. For a first GPU smoke run, set `NUM_ENVS = 64` and
+`MAX_ITERATIONS = 2` with a separate experiment name such as
+`go2handstand_smoke`; confirm checkpoints are written before starting the
+full run below. Kernel compilation can make the first iteration slow.
+
+1. Commit/push these changes to the branch you train from, or otherwise put the
+   updated repository into the runtime. MoLab cannot see local unpushed edits.
+2. In Setup, set `REPO_URL` and `BRANCH` to that repository and branch, then run
+   setup and the GPU check.
+3. In Train, use `TASK = "go2handstand"`, `EXPERIMENT_NAME = "go2handstand"`,
+   `DEVICE = "cuda:0"`, `NUM_ENVS = 4096`, and `RESUME = False` for a fresh run.
+   The notebook defaults to 1500 iterations as an initial budget, not a
+   guaranteed completion point. Run the training cell once; reset distributions
+   and training stages change automatically inside that process.
+4. To resume, keep the experiment name, set `RESUME = True` and `LOAD_RUN` to
+   the saved run directory. The notebook adds `--original_cfg` for handstands
+   so the saved curriculum settings accompany the restored progress. Download
+   the full run before ending the runtime; on a new runtime restore it under
+   `logs/<experiment>/<run>/` before resuming.
+
+Run section 3 and click **Download** to save the complete run archive.
+Do not rely on generated checkpoints surviving runtime shutdown: current
+[Molab storage rules](https://marimo.io/pages/molab/storage) treat generated
+workspace files as scratch. Extract the archive inside your local `logs/`
+directory, preserving both checkpoints and `files/`, then shut down the
+cloud runtime when finished.
+
+Playback defaults to standing starts, which tests whether entry was learned.
+To inspect the checkpoint's assisted reset level instead:
+
+```bash
+uv run --frozen scripts/play.py --task go2handstand --device cpu --num_envs 1 \
+  --experiment_name go2handstand --load_run YOUR_RUN --original_cfg \
+  --handstand_reset curriculum --no-keyboard
+```
+
+Next extensions are explicit center-of-mass alignment over the front-foot
+support segment and a controlled return to four feet. Reset geometry and
+curriculum mechanics have CPU tests; learning performance and GPU training
+still require a training run.

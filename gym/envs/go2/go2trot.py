@@ -27,12 +27,28 @@ class Go2Trot(Go2):
         )
         self.gait_reference = torch.zeros_like(self.dof_pos_target)
         foot_names = self.robot_layout.body_groups["feet"]
-        # added this new functionality 
+        # added this new functionality
         phase_offsets = self.cfg.control.gait_phase_offsets
-        self._gait_phase_offsets = (2 * torch.pi * torch.tensor( [phase_offsets[name] for name in foot_names], dtype=torch.float,device=self.device,))
+        self._gait_phase_offsets = (
+            2
+            * torch.pi
+            * torch.tensor(
+                [phase_offsets[name] for name in foot_names],
+                dtype=torch.float,
+                device=self.device,
+            )
+        )
         self._gait_dof_phase_offsets = self._gait_phase_offsets.repeat_interleave(3)
-        self._gait_joint_offsets = torch.tensor(self.cfg.control.gait_joint_offsets, dtype=torch.float, device=self.device,)
-        self._gait_joint_amplitudes = torch.tensor(self.cfg.control.gait_joint_amplitudes, dtype=torch.float, device=self.device,)
+        self._gait_joint_offsets = torch.tensor(
+            self.cfg.control.gait_joint_offsets,
+            dtype=torch.float,
+            device=self.device,
+        )
+        self._gait_joint_amplitudes = torch.tensor(
+            self.cfg.control.gait_joint_amplitudes,
+            dtype=torch.float,
+            device=self.device,
+        )
         self._update_phase_observation()
         self._update_gait_reference()
 
@@ -49,10 +65,12 @@ class Go2Trot(Go2):
         )
         leg_length = getattr(self.cfg.control, "standing_leg_length", None)
         if leg_length is not None:
-            # Symmetric thigh/calf posture keeps feet beneath the hips 
+            # Symmetric thigh/calf posture keeps feet beneath the hips
             standing = self._standing_posture()
             # Height remains controllable during locomotion, too
-            self.gait_reference[:] = standing + blend * ( self.gait_reference - self._gait_joint_offsets)
+            self.gait_reference[:] = standing + blend * (
+                self.gait_reference - self._gait_joint_offsets
+            )
 
     def _locomotion_blend(self):
         # Older saved configs retain their original reference behavior.
@@ -146,7 +164,9 @@ class Go2Trot(Go2):
     def _advance_phase(self):
         # phase_frequency is in cycles/s; _post_physics_step runs once per
         # physics substep, so convert cycles to radians and use the simulation dt
-        self.phase.add_(2 * torch.pi * self.dt * self.phase_frequency / self.cfg.control.decimation).remainder_(2 * torch.pi)
+        self.phase.add_(
+            2 * torch.pi * self.dt * self.phase_frequency / self.cfg.control.decimation
+        ).remainder_(2 * torch.pi)
 
     def _post_decimation_step(self):
         super()._post_decimation_step()

@@ -71,7 +71,7 @@ class Go2TrotCfg(Go2Cfg):
 
     class push_robots(Go2Cfg.push_robots):
         toggle = True
-        interval_s = 20 # changed this to 10s, so it is more "on policy"
+        interval_s = 20  # changed this to 10s, so it is more "on policy"
 
     class domain_randomization(Go2Cfg.domain_randomization):
         class startup(Go2Cfg.domain_randomization.startup):
@@ -181,11 +181,12 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 reference_traj = 3.0
 
                 # Base-height-control rewards
-                tracking_base_height = 5.0 #trying to reward more! 
-                unwanted_motion = 1.0 #reducing more 
+                tracking_base_height = 5.0  # trying to reward more!
+                unwanted_motion = 1.0  # reducing more
                 residual_motion = 0.5
                 feet_slip = 0.0
                 standing_symmetry = 0.0
+
             class termination_weight:
                 termination = 2.0
 

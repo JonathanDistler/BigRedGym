@@ -95,6 +95,7 @@ def _(Path, os):
         if k not in _shadowing and not (k.startswith("UV_") and k != "UV_CACHE_DIR")
     }
     ENV["UV_PYTHON"] = "3.11"
+    ENV["PYTHONUNBUFFERED"] = "1"
 
     print(f"work dir : {WORK}")
     print(f"repo     : {REPO}")
@@ -158,7 +159,8 @@ def _(ENV, REPO, subprocess):
         "print('torch', torch.__version__, '| mujoco', mujoco.__version__, "
         "'| cuda', torch.cuda.is_available(), "
         "'|', torch.cuda.get_device_name(0) "
-        "if torch.cuda.is_available() else 'NO GPU')"
+        "if torch.cuda.is_available() else 'NO GPU'); "
+        "assert torch.cuda.is_available(), 'Attach a GPU runtime before training'"
     )
     subprocess.run(
         [
@@ -182,6 +184,24 @@ def _(mo):
 
     Below, we specify the task that we actually want to train on. Notice we have to specify
     the task *and* the device to train on.
+
+    **Handstand curriculum:** use `TASK = "go2handstand"`, a new experiment name,
+    and `RESUME = False` for your first run. Ensure section 1 checks out a branch
+    containing the handstand implementation; local unpushed edits are not in MoLab.
+    Gravity stays at 9.81. Resets start near vertical, then automatically become
+    harder after two batches of at least 128 completed primary episodes each
+    achieve a two-second hold in at least 70% of those episodes. Levels are
+    near vertical, perturbed vertical, 70°, 45°, 20°, and standing. Look for
+    `[handstand curriculum]` messages in the training output. Easier resets stay
+    in the mix to preserve balance practice; they cannot trigger advancement.
+
+    You do not edit the initial distribution between levels or restart training.
+    Checkpoints include curriculum progress. To continue a handstand run, keep
+    the experiment name, set `RESUME = True`, and set `LOAD_RUN` to that run;
+    the command also loads its saved configuration. Download the run before
+    ending the runtime, and restore it under `logs/<experiment>/<run>/` in a
+    new runtime before resuming. A low success rate keeps the current level;
+    reaching 1500 iterations does not guarantee reaching the standing level.
     """)
     return
 
@@ -189,11 +209,11 @@ def _(mo):
 @app.cell
 def _():
     # --- edit, run this cell, then **run the next one** --------------------------
-    TASK = "go2trot"  # go2trot | mini_cheetah | humanoid | pendulum ...
+    TASK = "go2handstand"  # go2handstand | go2trot | mini_cheetah | ...
     DEVICE = "cuda:0" # specifies which GPU to use - do not edit this line unless you know what this means!
-    NUM_ENVS = 4096 # we specify multiples of 2 to compensate for the hardware.
-    MAX_ITERATIONS = 550
-    EXPERIMENT_NAME = "go2trot_height"  # separate the height run from old policies
+    NUM_ENVS = 4096 # parallel simulations; reduce this if GPU memory runs out.
+    MAX_ITERATIONS = 1500
+    EXPERIMENT_NAME = "go2handstand"  # fresh experiment for handstand policies
     RESUME = False  # resume the newest run for this experiment (if you stopped a training run)
     LOAD_RUN = ""  # explicit run directory when resuming; blank selects latest
     CHECKPOINT = -1  # -1 selects the latest checkpoint in LOAD_RUN
@@ -236,6 +256,8 @@ def _(
         _cmd += ["--experiment_name", EXPERIMENT_NAME.strip()]
     if RESUME:
         _cmd += ["--resume"]
+        if TASK == "go2handstand":
+            _cmd += ["--original_cfg"]  # retain the saved curriculum settings
         if LOAD_RUN.strip():
             _cmd += ["--load_run", LOAD_RUN.strip()]
         _cmd += ["--checkpoint", str(int(CHECKPOINT))]

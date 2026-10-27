@@ -206,6 +206,13 @@ class OnPolicyRunner(BaseRunner):
         )
         logger.register_category("actor", self.alg.actor, ["action_std", "entropy"])
 
+        if hasattr(self.env, "curriculum_level"):
+            logger.register_category(
+                "curriculum",
+                self.env,
+                ["curriculum_level", "curriculum_success_rate"],
+            )
+
         logger.attach_torch_obj_to_wandb((self.alg.actor, self.alg.critic))
 
     def save(self):
@@ -219,6 +226,11 @@ class OnPolicyRunner(BaseRunner):
                 "optimizer_state_dict": self.alg.optimizer.state_dict(),
                 "critic_optimizer_state_dict": self.alg.critic_optimizer.state_dict(),
                 "iter": self.it,
+                "environment_training_state": (
+                    self.env.training_state_dict()
+                    if hasattr(self.env, "training_state_dict")
+                    else {}
+                ),
             },
             temporary,
         )
@@ -234,6 +246,10 @@ class OnPolicyRunner(BaseRunner):
                 loaded_dict["critic_optimizer_state_dict"]
             )
         self.it = loaded_dict["iter"]
+        if hasattr(self.env, "load_training_state_dict"):
+            self.env.load_training_state_dict(
+                loaded_dict.get("environment_training_state", {})
+            )
 
     def switch_to_eval(self):
         self.alg.actor.eval()

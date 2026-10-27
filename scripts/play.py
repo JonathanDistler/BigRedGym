@@ -50,6 +50,15 @@ def get_play_args(argv=None):
         action="store_true",
         help="Load environment and runner configs saved with the selected run.",
     )
+    parser.add_argument(
+        "--handstand_reset",
+        choices=["standing", "curriculum"],
+        default="standing",
+        help=(
+            "Handstand playback reset: standing tests entry; "
+            "curriculum tests saved level."
+        ),
+    )
     parser.add_argument("--headless", action="store_true", default=False)
     parser.add_argument(
         "--backend",
@@ -96,7 +105,14 @@ def setup(args):
         env_cfg.commands.resampling_time = 9999
     if hasattr(env_cfg, "push_robots"):
         env_cfg.push_robots.toggle = False
-    env_cfg.init_state.reset_mode = "reset_to_basic"
+    if hasattr(env_cfg, "handstand_curriculum"):
+        assisted = args.handstand_reset == "curriculum"
+        env_cfg.handstand_curriculum.enabled = assisted
+        env_cfg.init_state.reset_mode = (
+            "reset_to_handstand" if assisted else "reset_to_basic"
+        )
+    else:
+        env_cfg.init_state.reset_mode = "reset_to_basic"
     if hasattr(env_cfg, "viewer"):
         env_cfg.viewer.show_ui = args.viewer_ui
 
@@ -184,7 +200,9 @@ def play(env, runner):
             fig, ax = plt.subplots()
             ax.plot(time, desired_height, label="Goal height")
             ax.plot(time, actual_height, label="Actual height")
-            ax.plot(time, delta_height, label="Difference between Goal and Actual Height")
+            ax.plot(
+                time, delta_height, label="Difference between Goal and Actual Height"
+            )
             ax.set_xlabel("Time (s)")
             ax.set_ylabel("Height (m)")
             ax.legend()
