@@ -570,15 +570,15 @@ class LeggedRobot(BaseTask):
         return -torch.mean(torch.square(self.torques), dim=1)
 
     def _reward_dof_vel(self):
-        """Penalize dof velocities"""
         return -torch.mean(torch.square(self.dof_vel), dim=1)
 
     def _reward_action_rate(self):
-        """Penalize changes in actions"""
+        """Sum squared one-step and per-step-normalized two-step changes."""
         n = self.num_actuators
-        error = torch.square(
-            self.dof_pos_history[:, :n] - self.dof_pos_history[:, 2 * n :]
-        )
+        current = self.dof_pos_history[:, :n]
+        one_step = current - self.dof_pos_history[:, n : 2 * n]
+        two_step = (current - self.dof_pos_history[:, 2 * n :]) / 2
+        error = one_step.square() + two_step.square()
         return -torch.mean(error, dim=1)
 
     def _reward_action_rate2(self):
