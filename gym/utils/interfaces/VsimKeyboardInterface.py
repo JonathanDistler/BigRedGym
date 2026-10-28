@@ -3,7 +3,7 @@
 vlearn exposes POLLING input (`GymRender.is_key_down`) rather than the event
 callbacks MuJoCo provides, so this interface remembers the
 previous key state and acts on rising edges — giving the same discrete
-"1/5 of max per press" feel as the MuJoCo interface instead of ramping the
+fixed increment per press as the MuJoCo interface instead of ramping the
 command every frame a key is held.
 
 Bindings and command logic are shared with the MuJoCo interface — see

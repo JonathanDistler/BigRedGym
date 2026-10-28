@@ -24,16 +24,20 @@ def test_height_arrows_change_only_height_and_survive_reset():
     env.commands[:, :3] = torch.tensor([0.5, -0.2, 0.3])
     locomotion = env.commands[:, :3].clone()
     ui._on_key(265)
+    ui.process_pending()
     torch.testing.assert_close(env.commands[:, 3], torch.full((2,), 0.41))
     for _ in range(30):
         ui._on_key(264)
+    ui.process_pending()
     torch.testing.assert_close(env.commands[:, 3], torch.full((2,), 0.30))
     for _ in range(30):
         ui._on_key(265)
+    ui.process_pending()
     torch.testing.assert_close(env.commands[:, 3], torch.full((2,), 0.45))
     torch.testing.assert_close(env.commands[:, :3], locomotion)
     before = env.commands.clone()
     ui._on_key(ord("R"))
+    ui.process_pending()
     torch.testing.assert_close(env.commands, before)
 
 

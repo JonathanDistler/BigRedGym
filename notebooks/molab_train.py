@@ -185,7 +185,18 @@ def _(mo):
     Below, we specify the task that we actually want to train on. Notice we have to specify
     the task *and* the device to train on.
 
-    **Handstand curriculum:** use `TASK = "go2handstand"`, a new experiment name,
+    **Balance first (default):** `TASK = "go2balance"` starts at the top with
+    a handstand joint reference, small residual actions, fixed physics, and
+    separate balance shaping rewards. Use `EXPERIMENT_NAME = "go2balance"`
+    and `RESUME = False`. Raw `balance/*` reward components and front-foot
+    loads are saved in `vitals.jsonl` (and W&B when enabled). A strict two-second
+    hold in 70% of primary episodes across two batches unlocks each next level:
+    nominal, 1° tilt, 3° tilt plus angular velocity, then 0.03 and 0.06 m/s
+    horizontal velocity impulses. Pushes occur at most once per episode after
+    settling. Promotion at push levels requires a hold after an actual push.
+    There are no standing starts or entry training in this task.
+
+    **Full handstand curriculum:** use `TASK = "go2handstand"`, a new experiment name,
     and `RESUME = False` for your first run. Ensure section 1 checks out a branch
     containing the handstand implementation; local unpushed edits are not in MoLab.
     Gravity stays at 9.81. Resets start near vertical, then automatically become
@@ -209,11 +220,11 @@ def _(mo):
 @app.cell
 def _():
     # --- edit, run this cell, then **run the next one** --------------------------
-    TASK = "go2handstand"  # go2handstand | go2trot | mini_cheetah | ...
+    TASK = "go2balance"  # go2balance | go2handstand | go2trot | ...
     DEVICE = "cuda:0" # specifies which GPU to use - do not edit this line unless you know what this means!
     NUM_ENVS = 4096 # parallel simulations; reduce this if GPU memory runs out.
     MAX_ITERATIONS = 1500
-    EXPERIMENT_NAME = "go2handstand"  # fresh experiment for handstand policies
+    EXPERIMENT_NAME = "go2balance"  # train top balance before standing entry
     RESUME = False  # resume the newest run for this experiment (if you stopped a training run)
     LOAD_RUN = ""  # explicit run directory when resuming; blank selects latest
     CHECKPOINT = -1  # -1 selects the latest checkpoint in LOAD_RUN
@@ -256,7 +267,7 @@ def _(
         _cmd += ["--experiment_name", EXPERIMENT_NAME.strip()]
     if RESUME:
         _cmd += ["--resume"]
-        if TASK == "go2handstand":
+        if TASK in {"go2handstand", "go2balance"}:
             _cmd += ["--original_cfg"]  # retain the saved curriculum settings
         if LOAD_RUN.strip():
             _cmd += ["--load_run", LOAD_RUN.strip()]

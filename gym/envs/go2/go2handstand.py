@@ -80,7 +80,8 @@ class Go2Handstand(HandstandCurriculum, Go2):
         kick = (self._rear_extension() * clearance * unloaded).amax(dim=1)
         return (self.handstand_stage >= 1) * kick
 
-    def _reward_handstand_balance(self):
+    def _handstand_balance_components(self):
+        """Raw [0, 1] terms, shared by strict success and diagnostic logging."""
         s = self.cfg.reward_settings
         load = self._handstand_loads()
         front = load[:, :2]
@@ -102,16 +103,21 @@ class Go2Handstand(HandstandCurriculum, Go2):
             -self.base_ang_vel.square().sum(dim=1) / s.angular_sigma**2
             - self.base_lin_vel.square().sum(dim=1) / s.linear_sigma**2
         )
-        return (
-            (self.handstand_stage >= 2)
-            * support
-            * sharing
-            * rear_off
-            * vertical
-            * clearance
-            * self._rear_extension().amin(dim=1)
-            * stable
-        )
+        return {
+            "support": support,
+            "sharing": sharing,
+            "rear_off": rear_off,
+            "vertical": vertical,
+            "clearance": clearance,
+            "rear_extension": self._rear_extension().amin(dim=1),
+            "stable": stable,
+        }
+
+    def _reward_handstand_balance(self):
+        score = (self.handstand_stage >= 2).to(self.dof_pos.dtype)
+        for component in self._handstand_balance_components().values():
+            score = score * component
+        return score
 
     def _reward_handstand_slip(self):
         contact = self._handstand_loads()[:, :2] > 0.02

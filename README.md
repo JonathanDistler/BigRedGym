@@ -158,6 +158,13 @@ not a complete locomotion validation.
 commands and prints average height error after settling. In interactive
 playback, Up/Down changes desired height by 0.01 m within those bounds;
 I/J/K/L/N/M retain their locomotion controls. Reset preserves your commands.
+Velocity presses change commands by 0.1 m/s and yaw by 0.1 rad/s, capped
+at the configured training ranges. X zeros translation and yaw while keeping
+the requested height. MuJoCo applies key presses between simulation steps,
+including resets, to avoid changing physics state from the viewer thread.
+With the viewer focused, press R to reset all robots to the configured start
+pose; the terminal confirms the reset. Handstand playback returns to standing
+by default, or the assisted pose with `--handstand_reset curriculum`.
 These bounds are training targets, not proof that every target is physically
 achievable while walking. Evaluate the low and high targets after training.
 
@@ -286,6 +293,86 @@ uv run --frozen scripts/play.py --task go2handstand --device cpu --num_envs 1 \
   --experiment_name go2handstand --load_run YOUR_RUN --original_cfg \
   --handstand_reset curriculum --no-keyboard
 ```
+
+## Balance first: `go2balance`
+
+Use this separate task to learn the top hold before learning handstand entry.
+All resets are near 90° with rear feet raised, normal gravity, fixed mass,
+friction and PD gains, and no generic random pushes. Zero policy action holds
+a handstand joint reference rather than commanding the standing pose. Residual
+actions use 0.25 rad per policy unit with initial exploration std 0.3.
+
+Start a **fresh** run; the old handstand policy used a different action reference
+and reward objective. The MoLab notebook now defaults to this task and experiment.
+For a GPU run after updating the cloud checkout:
+
+```bash
+uv run --frozen --extra gpu --no-dev scripts/train.py --task go2balance \
+  --device cuda:0 --num_envs 4096 --max_iterations 1500 \
+  --experiment_name go2balance --headless --disable_wandb
+```
+
+Orientation, front-foot support/load sharing, rear clearance, and stability
+provide separate shaping rewards. The original multiplicative balance score
+still defines success: score ≥0.5 continuously for two seconds, without a fall.
+Higher shaping reward alone cannot promote the curriculum.
+
+| Level | Reset tilt | Initial angular velocity per axis | Horizontal impulse |
+| --- | --- | --- | --- |
+| 0 | 0° | 0 | None |
+| 1 | ±1° | 0 | None |
+| 2 | ±3° | ±0.03 rad/s | None |
+| 3 | ±3° | ±0.03 rad/s | 0.03 m/s delta velocity |
+| 4 | ±5° | ±0.06 rad/s | 0.06 m/s delta velocity |
+
+Two consecutive batches of at least 128 completed primary episodes with ≥70%
+strict-hold success advance a level. From level 1, 20% easier replay is retained.
+At push levels, 25% of episodes remain undisturbed and cannot promote that
+level. One impulse is attempted on a three-second schedule, only after a 0.5 s
+strict hold; no more than one is delivered per episode. It changes world-XY
+velocity in a random direction, with the listed bounded magnitude, rather than
+applying a force for a duration. A push resets the hold history. An episode
+cannot succeed until it receives its push and holds again. Challenged episodes
+that fail before receiving a push count as failures in the promotion rate.
+Set `balance_perturbations.enabled = False` to disable impulses while retaining
+the reset-noise curriculum. Checkpoints persist the curriculum level and counters;
+resuming samples new episodes at that level.
+
+Each iteration writes to `logs/go2balance/<run>/vitals.jsonl` and optionally W&B:
+
+- `rewards/*`: weighted episodic reward rates, including each shaping reward.
+- `balance/support`, `sharing`, `rear_off`, `vertical`, `clearance`,
+  `rear_extension`, `stable`: raw, unweighted component means over all robots
+  and collected control steps, including terminal steps, excluding reset steps.
+- `balance/front_left_load`, `front_right_load`, `rear_load`: vertical contact
+  forces divided by robot weight; balanced front support is about 0.5 per foot.
+- `balance/strict_score`, `hold_seconds`, `terminated`, `push_fraction`,
+  `push_delta_velocity`: raw score, current continuous hold duration, terminal
+  fraction, push-event fraction, and delta velocity averaged over all steps
+  (zero on non-push steps).
+- `curriculum/curriculum_level` and `curriculum/curriculum_success_rate`:
+  completed-primary-episode progression, separate from shaping reward.
+
+Playback and evaluation automatically keep top resets for this task:
+
+```bash
+uv run --frozen scripts/play.py --task go2balance --device cpu --num_envs 1 \
+  --experiment_name go2balance --load_run YOUR_RUN --original_cfg --no-keyboard
+uv run --frozen -m scripts.evaluate --task go2balance --device cpu --num_envs 8 \
+  --experiment_name go2balance --load_run YOUR_RUN --original_cfg
+```
+
+Evaluation prints strict-hold counts and raw balance components as well as falls.
+CPU regression tests and a two-iteration CPU smoke run verify references, reward
+signals, logging, perturbation gates and checkpoint restoration. These checks do
+not establish learned balancing or GPU training performance.
+
+Front-leg loading is already essential during the top hold: the front feet must
+support body weight and share load. After this works reliably, train the entry
+from four feet: shift weight forward, unload/lift the rear legs, then reach the
+top controller. The original `go2handstand` task contains lean/kick stages, but
+transferring the new balance controller into entry training needs a deliberate
+reference/controller handoff; it is not an automatic continuation of this task.
 
 Next extensions are explicit center-of-mass alignment over the front-foot
 support segment and a controlled return to four feet. Reset geometry and

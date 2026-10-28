@@ -71,6 +71,9 @@ class OnPolicyRunner(BaseRunner):
                     self.sim_and_log_states(states_to_log_dict, it_idx)
 
             # * Rollout
+            diagnostics = getattr(self.env, "training_diagnostics", None)
+            if diagnostics is not None:
+                diagnostics.reset()
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
                     actions = self.alg.act(actor_obs)
@@ -91,6 +94,8 @@ class OnPolicyRunner(BaseRunner):
                         self.env.step()
                         # put reward integration here
                         self.update_rewards_dict(rewards_dict, step)
+                        if diagnostics is not None:
+                            self.env.update_training_diagnostics()
 
                     self.reset_envs()
 
@@ -123,6 +128,8 @@ class OnPolicyRunner(BaseRunner):
             self.alg.update(storage.data)
             storage.clear()
             logger.toc("learning")
+            if diagnostics is not None:
+                diagnostics.finish()
             logger.log_all_categories()
 
             logger.finish_iteration()
@@ -212,6 +219,10 @@ class OnPolicyRunner(BaseRunner):
                 self.env,
                 ["curriculum_level", "curriculum_success_rate"],
             )
+
+        diagnostics = getattr(self.env, "training_diagnostics", None)
+        if diagnostics is not None:
+            logger.register_category("balance", diagnostics, list(diagnostics.names))
 
         logger.attach_torch_obj_to_wandb((self.alg.actor, self.alg.critic))
 

@@ -118,13 +118,13 @@ def test_held_key_steps_command_once_per_press():
     render.held = {BINDINGS["forward"]}
     for _ in range(10):  # held down for 10 frames
         ui.poll(render)
-    assert env.commands[0, 0].item() == start + step
+    assert env.commands[0, 0].item() == pytest.approx(start + step)
 
     render.held = set()  # release
     ui.poll(render)
     render.held = {BINDINGS["forward"]}  # press again
     ui.poll(render)
-    assert env.commands[0, 0].item() == start + 2 * step
+    assert env.commands[0, 0].item() == pytest.approx(start + 2 * step)
 
 
 def test_r_resets_once_per_press():
@@ -178,7 +178,9 @@ def test_mujoco_callback_registered_and_dispatches():
 
     start = env.commands[0, 0].item()
     ui._on_key(ord(BINDINGS["forward"]))
-    assert env.commands[0, 0].item() == start + ui.commands.increment_x
+    assert env.commands[0, 0].item() == start
+    ui.process_pending()
+    assert env.commands[0, 0].item() == pytest.approx(start + ui.commands.increment_x)
 
 
 def test_mujoco_ignores_unbound_keys():
@@ -195,6 +197,7 @@ def test_mujoco_arrows_dispatch(keycode, action):
     actions = []
     ui.commands.apply = actions.append
     ui._on_key(keycode)
+    ui.process_pending()
     assert actions == [action]
 
 
@@ -227,6 +230,51 @@ def test_commands_clamp_at_limits():
     for _ in range(400):
         cmds.apply("back")
     assert env.commands[0, 0].item() >= cmds.max_vel_backward - 1e-6
+
+
+def test_limits_follow_training_ranges_and_steps_are_gentle():
+    env = FakeEnv()
+    env.command_ranges = {
+        "lin_vel_x": [-0.5, 0.0, 0.5, 1.0, 2.0],
+        "lin_vel_y": 0.5,
+        "yaw_vel": 1.5,
+    }
+    cmds = TeleopCommands(env)
+    assert cmds.increment_x == cmds.increment_y == cmds.increment_yaw == 0.1
+    for action, column, target in (
+        ("forward", 0, 2.0), ("back", 0, -0.5),
+        ("strafe_left", 1, 0.5), ("yaw_right", 2, -1.5),
+    ):
+        for _ in range(100):
+            cmds.apply(action)
+        assert env.commands[0, column].item() == pytest.approx(target)
+
+
+def test_stop_preserves_height_with_inference_buffers():
+    env = FakeEnv()
+    env.cfg.reward_settings = SimpleNamespace(base_height_target=0.35)
+    with torch.inference_mode():
+        env.commands = torch.ones(2, 4)
+    cmds = TeleopCommands(env)
+    cmds.apply("forward")
+    cmds.apply("yaw_left")
+    cmds.apply("stop")
+    assert torch.equal(env.commands[:, :3], torch.zeros(2, 3))
+    assert env.commands[:, 3].tolist() == pytest.approx([0.35, 0.35])
+
+
+def test_mujoco_reset_runs_only_when_simulation_drains_queue(capsys):
+    env = FakeEnv()
+    ui = MujocoKeyboardInterface(env)
+    ui._on_key(ord("I"))
+    ui._on_key(ord("R"))
+    assert env.reset_count == 0
+    ui.process_pending()
+    assert env.reset_count == 1
+    assert env.commands[0, 0].item() == pytest.approx(0.1)
+    assert "Reset all robots; velocity and height commands preserved." in capsys.readouterr().out
+    ui.process_pending()
+    assert env.reset_count == 1
 
 
 # ── Viewer UI panels (MuJoCo) ────────────────────────────────────────────

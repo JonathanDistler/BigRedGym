@@ -106,7 +106,10 @@ def setup(args):
     if hasattr(env_cfg, "push_robots"):
         env_cfg.push_robots.toggle = False
     if hasattr(env_cfg, "handstand_curriculum"):
-        assisted = args.handstand_reset == "curriculum"
+        assisted = (
+            getattr(env_cfg, "balance_only", False)
+            or args.handstand_reset == "curriculum"
+        )
         env_cfg.handstand_curriculum.enabled = assisted
         env_cfg.init_state.reset_mode = (
             "reset_to_handstand" if assisted else "reset_to_basic"
@@ -165,7 +168,10 @@ def setup(args):
     runner.switch_to_eval()
     return env, runner
 
+@torch.inference_mode()
 def play(env, runner):
+    # Checkpoint restoration and training rollouts can leave inference tensors
+    # in the environment; keep all playback buffer updates in the same mode.
     desired_height = []
     actual_height = []
     delta_height = []
@@ -178,6 +184,9 @@ def play(env, runner):
     n_steps = 10 * int(env.max_episode_length)
     try:
         for t in range(n_steps):
+            keyboard = getattr(env, "_keyboard_interface", None)
+            if keyboard is not None:
+                keyboard.process_pending()
             runner.set_actions(
                 runner.actor_cfg["actions"],
                 runner.get_inference_actions(),

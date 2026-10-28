@@ -44,6 +44,7 @@ BINDINGS = {
     "up": "UP",
     "down": "DOWN",
     "reset": "R",
+    "stop": "X",
 }
 
 # key name → action name (translated by each viewer adapter)
@@ -54,9 +55,10 @@ HELP_LINES = (
     "  J/L           strafe left / strafe right",
     "  N/M           yaw left / yaw right",
     "  Up/Down       raise / lower base height by 0.01 m",
-    "  R             reset envs",
+    "  R             restart all robots in the configured start pose (keep commands)",
+    "  X             stop translation and yaw (keep height)",
     "  Esc / window  quit",
-    "  commands step in 1/5 increments of max",
+    "  velocity steps: 0.1 m/s; yaw steps: 0.1 rad/s",
 )
 
 
@@ -66,18 +68,25 @@ class TeleopCommands:
     Engine-agnostic: it only touches ``env.commands`` and the reset path.
     """
 
+    @torch.inference_mode()
     def __init__(self, env):
         self.env = env
 
-        self.max_vel_forward = 4.0
-        self.max_vel_backward = -1.0
-        self.increment_x = (self.max_vel_forward - self.max_vel_backward) * 0.1
+        ranges = getattr(env, "command_ranges", {})
+        forward_range = ranges.get("lin_vel_x", [-1.0, 2.0])
+        self.max_vel_forward = max(forward_range)
+        self.max_vel_backward = min(forward_range)
+        self.increment_x = 0.1
 
-        self.max_vel_sideways = 1.0
-        self.increment_y = self.max_vel_sideways * 0.2
+        def magnitude(value):
+            if isinstance(value, (list, tuple)):
+                return max(abs(v) for v in value)
+            return abs(value)
 
-        self.max_vel_yaw = 2.0
-        self.increment_yaw = self.max_vel_yaw * 0.2
+        self.max_vel_sideways = magnitude(ranges.get("lin_vel_y", 1.0))
+        self.increment_y = 0.1
+        self.max_vel_yaw = magnitude(ranges.get("yaw_vel", 2.0))
+        self.increment_yaw = 0.1
 
         # added to increment height
 
@@ -99,6 +108,7 @@ class TeleopCommands:
         if hasattr(env.cfg, "commands"):
             env.cfg.commands.resampling_time = env.max_episode_length_s + 1
 
+    @torch.inference_mode()
     def apply(self, action: str) -> None:
         """Apply one discrete press of ``action`` (see BINDINGS)."""
         c = self.env.commands
@@ -146,11 +156,14 @@ class TeleopCommands:
                     max=self.max_height,
                 )
 
+        elif action == "stop":
+            c[:, :3] = 0.0
         elif action == "reset":
             requested_commands = c.clone()
             self.env.timed_out[:] = True
             self.env.reset()
             self.env.commands.copy_(requested_commands)
+            print("Reset all robots; velocity and height commands preserved.")
         else:
             raise ValueError(f"unknown teleop action {action!r}")
 

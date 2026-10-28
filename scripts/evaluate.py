@@ -11,6 +11,7 @@ import torch
 from scripts.play import get_play_args, setup
 
 
+@torch.inference_mode()
 def evaluate(env, runner, seconds=5.0, height=None):
     initial_height = env.root_states[:, 2].clone()
     minimum_height = initial_height.clone()
@@ -22,6 +23,9 @@ def evaluate(env, runner, seconds=5.0, height=None):
     initial_xy = env.root_states[:, :2].clone()
     samples = 0
     steps = int(seconds / env.dt)
+    diagnostics = getattr(env, "training_diagnostics", None)
+    if diagnostics is not None:
+        diagnostics.reset()
     for step in range(steps):
         if height is not None:
             env.commands[:, :3] = 0
@@ -32,6 +36,8 @@ def evaluate(env, runner, seconds=5.0, height=None):
             runner.actor_cfg["disable_actions"],
         )
         env.step()
+        if diagnostics is not None:
+            env.update_training_diagnostics()
         minimum_height = torch.minimum(minimum_height, env.root_states[:, 2])
         fell |= env.terminated
         low |= env.root_states[:, 2] < 0.20
@@ -52,6 +58,18 @@ def evaluate(env, runner, seconds=5.0, height=None):
     print(f"Robots below 0.20m: {low.sum().item()}/{env.num_envs}")
     print(f"Mean minimum base height: {minimum_height.mean().item():.3f}m")
     print(f"Mean final base height: {env.root_states[:, 2].mean().item():.3f}m")
+    if diagnostics is not None:
+        diagnostics.finish()
+        c = env.cfg.handstand_curriculum
+        held = env._best_hold >= c.hold_seconds
+        held &= (env._episode_push_limit == 0) | (env._push_count > 0)
+        print(
+            f"Robots reaching a {c.hold_seconds:g}s strict hold: "
+            f"{held.sum().item()}/{env.num_envs}"
+        )
+        print("Raw balance means over evaluation control steps:")
+        for name in diagnostics.names:
+            print(f"  {name}: {getattr(diagnostics, name).item():.4f}")
     if height is not None:
         print(
             f"Target: {height:.3f}m; settled mean height: "
@@ -75,7 +93,7 @@ if __name__ == "__main__":
     if args.seed is None:
         args.seed = 42
     torch.set_num_threads(1)
-    with torch.no_grad():
+    with torch.inference_mode():
         env, runner = setup(args)
         try:
             if not hasattr(env, "root_states"):
