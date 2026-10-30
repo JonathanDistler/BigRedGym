@@ -59,6 +59,12 @@ def make_train_parser():
         help="Resume optimizer and model state from an existing run.",
     )
     parser.add_argument(
+        "--warm_start",
+        type=str,
+        default=None,
+        help="Initialize actor and critic from a checkpoint with fresh optimizers and training state.",
+    )
+    parser.add_argument(
         "--load_run",
         type=str,
         default=None,
@@ -84,7 +90,11 @@ def make_train_parser():
 
 
 def get_train_args(argv=None):
-    return make_train_parser().parse_args(argv)
+    parser = make_train_parser()
+    args = parser.parse_args(argv)
+    if args.warm_start and args.resume:
+        parser.error("choose --warm_start or --resume")
+    return args
 
 
 def setup(args=None, env_cfg=None, train_cfg=None):
@@ -130,6 +140,8 @@ def setup(args=None, env_cfg=None, train_cfg=None):
         train_cfg.runner.experiment_name = args.experiment_name
     if args.resume:
         train_cfg.runner.resume = True
+    if args.warm_start:
+        train_cfg.runner.resume = False
     if args.load_run is not None:
         train_cfg.runner.load_run = args.load_run
     if args.checkpoint is not None:
@@ -159,6 +171,14 @@ def setup(args=None, env_cfg=None, train_cfg=None):
     randomize_episode_counters(env)
 
     policy_runner = task_registry.make_alg_runner(env, train_cfg)
+    if args.warm_start:
+        import torch
+
+        saved = torch.load(
+            args.warm_start, weights_only=True, map_location=args.device
+        )
+        policy_runner.alg.actor.load_state_dict(saved["actor_state_dict"])
+        policy_runner.alg.critic.load_state_dict(saved["critic_state_dict"])
 
     local_code_save_helper.save_local_files_to_logs(
         train_cfg.log_dir,
