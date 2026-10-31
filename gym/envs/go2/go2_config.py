@@ -119,6 +119,16 @@ class Go2Cfg(LeggedRobotCfg):
         ctrl_frequency = 100
         desired_sim_frequency = 500
 
+    class contact_cpg:
+        enabled = False
+        # Canonical feet: FL, FR, RL, RR. swing means always off-ground.
+        modes = ["phase", "phase", "phase", "phase"]
+        phase_offsets = [0.0, 0.5, 0.5, 0.0]  # cycles
+        frequency_hz = 1.0
+        sigma = 2.0  # rad/s per body-weight load
+        zeta = 0.0
+        force_filter_s = 0.02
+
     class commands:
         # * time before command are changed[s]
         resampling_time = 1.0

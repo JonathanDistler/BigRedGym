@@ -9,6 +9,12 @@ The selected backend is MuJoCo CPU/Warp or optional VSim.
 
 import argparse
 
+from gym.utils.robot_metrics import (
+    add_robot_options,
+    configure_contact_cpg,
+    attach_robot_metrics,
+)
+
 from gym.utils.task_registry import task_registry
 from gym.utils.helpers import randomize_episode_counters, set_seed
 from gym.utils.logging_and_saving import local_code_save_helper
@@ -62,7 +68,10 @@ def make_train_parser():
         "--warm_start",
         type=str,
         default=None,
-        help="Initialize actor and critic from a checkpoint with fresh optimizers and training state.",
+        help=(
+            "Initialize actor and critic from a checkpoint with fresh "
+            "optimizers and training state."
+        ),
     )
     parser.add_argument(
         "--load_run",
@@ -86,6 +95,7 @@ def make_train_parser():
     parser.add_argument("--disable_wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_entity", type=str, default=None)
+    add_robot_options(parser)
     return parser
 
 
@@ -115,6 +125,8 @@ def setup(args=None, env_cfg=None, train_cfg=None):
         )
     elif args.original_cfg:
         raise ValueError("original_cfg cannot be combined with supplied configs")
+
+    configure_contact_cpg(args, env_cfg, train_cfg)
 
     # Apply CLI overrides
     if args.num_envs is not None:
@@ -174,9 +186,7 @@ def setup(args=None, env_cfg=None, train_cfg=None):
     if args.warm_start:
         import torch
 
-        saved = torch.load(
-            args.warm_start, weights_only=True, map_location=args.device
-        )
+        saved = torch.load(args.warm_start, weights_only=True, map_location=args.device)
         policy_runner.alg.actor.load_state_dict(saved["actor_state_dict"])
         policy_runner.alg.critic.load_state_dict(saved["critic_state_dict"])
 
@@ -187,13 +197,19 @@ def setup(args=None, env_cfg=None, train_cfg=None):
         ),
     )
 
+    attach_robot_metrics(env, args)
     return train_cfg, policy_runner
 
 
 def train(train_cfg, policy_runner):
     wandb_helper = wandb_singleton.WandbSingleton()
-    policy_runner.learn()
-    wandb_helper.close_wandb()
+    try:
+        policy_runner.learn()
+    finally:
+        metrics = getattr(policy_runner.env, "robot_metrics", None)
+        if metrics is not None:
+            metrics.close()
+        wandb_helper.close_wandb()
 
 
 if __name__ == "__main__":

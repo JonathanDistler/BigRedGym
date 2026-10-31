@@ -10,6 +10,12 @@ Supports MuJoCo CPU/Warp and optional VSim checkpoints.
 """
 
 import argparse
+
+from gym.utils.robot_metrics import (
+    add_robot_options,
+    configure_contact_cpg,
+    attach_robot_metrics,
+)
 import hashlib
 import random
 from pathlib import Path
@@ -84,6 +90,7 @@ def get_play_args(argv=None):
         "gym/utils/interfaces/MujocoKeyboardInterface.py for key bindings). "
         "Use --no-keyboard to disable.",
     )
+    add_robot_options(parser)
     return parser.parse_args(argv)
 
 
@@ -97,6 +104,8 @@ def setup(args):
         experiment_name=args.experiment_name,
         load_run=args.load_run,
     )
+
+    configure_contact_cpg(args, env_cfg, train_cfg)
 
     # Play-time overrides — small batch, long episodes, no pushes.
     env_cfg.env.num_envs = args.num_envs
@@ -166,7 +175,9 @@ def setup(args):
 
     runner = task_registry.make_alg_runner(env, train_cfg)
     runner.switch_to_eval()
+    attach_robot_metrics(env, args)
     return env, runner
+
 
 @torch.inference_mode()
 def play(env, runner):
@@ -204,6 +215,9 @@ def play(env, runner):
                 delta_height.append(desired_height_val - actual_height_val)
             env.check_exit()
     finally:
+        metrics = getattr(env, "robot_metrics", None)
+        if metrics is not None:
+            metrics.close()
         # was getting errors when shutting down - had to use codex for this
         if time:
             fig, ax = plt.subplots()
@@ -218,6 +232,9 @@ def play(env, runner):
             ax.grid(True)
             fig.tight_layout()
             output_path = Path("graph_output/height_tracking.png").resolve()
+            if metrics is not None:
+                output_path = metrics.path / "height_tracking.png"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(output_path, dpi=300)
             plt.close(fig)
             print(f"Saved height tracking plot: {output_path}")

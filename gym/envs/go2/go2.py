@@ -1,12 +1,13 @@
 import torch
 
 from gym.envs.base.legged_robot import LeggedRobot
+from gym.envs.go2.contact_cpg import ContactCPG
 # from learning.utils.logger.SaveStates import (
 #     init_env_log_buffers,
 # )
 
 
-class Go2(LeggedRobot):
+class Go2(ContactCPG, LeggedRobot):
     def __init__(self, cfg, device, headless, backend):
         super().__init__(cfg, device, headless, backend)
 
