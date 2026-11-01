@@ -7,11 +7,17 @@ from gym.envs.go2.go2handstand_config import Go2HandstandCfg, Go2HandstandRunner
 class Go2BalanceCfg(Go2HandstandCfg):
     balance_only = True
 
+    class env(Go2HandstandCfg.env):
+        # Existing policies can drift into a fall after 25–30 seconds.
+        episode_length_s = 45
+
     # Keep physics fixed while learning the nominal balance controller.
     class domain_randomization(DomainRandomizationCfg):
         pass
 
     class handstand_curriculum(Go2HandstandCfg.handstand_curriculum):
+        hold_seconds = 5.0
+        success_fraction = 0.9
         pitch_degrees = [90.0] * 5
         tilt_noise_degrees = [0.0, 1.0, 3.0, 3.0, 5.0]
         angular_velocity_noise = [0.0, 0.0, 0.03, 0.03, 0.06]
@@ -22,7 +28,7 @@ class Go2BalanceCfg(Go2HandstandCfg):
         enabled = True
         # Bounded world-XY delta velocity, m/s; these are impulses, not forces.
         max_delta_velocity = [0.0, 0.0, 0.0, 0.03, 0.06]
-        interval_s = 3.0
+        interval_s = 6.0 #had been 3 seconds
         settled_hold_s = 0.5
         undisturbed_fraction = 0.25
 
