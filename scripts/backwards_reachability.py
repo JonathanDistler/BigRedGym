@@ -4,8 +4,10 @@ Run with python -m scripts.backwards_reachability.
 """
 
 import argparse
+import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import matplotlib
@@ -23,6 +25,27 @@ from gym.envs.go2.go2reachability_config import (
 )
 from gym.utils.helpers import set_seed
 from gym.utils.task_registry import task_registry
+from gym.utils.original_cfg import checkpoint_configs
+from gym.utils.robot_metrics import configure_contact_cpg
+
+
+def evaluation_configs(checkpoint=None, config_task=None, current_cfg=False):
+    cfg, train_cfg = Go2ReachabilityCfg(), Go2ReachabilityRunnerCfg()
+    if checkpoint is not None and not current_cfg:
+        saved_env, train_cfg = checkpoint_configs(checkpoint, config_task)
+        if hasattr(saved_env, "reachability"):
+            cfg = saved_env
+        else:
+            # Evaluate the saved balance controller on the current rear-leg
+            # recovery slice, retaining its physics and observation semantics.
+            for name in (
+                "reachability",
+                "handstand_curriculum",
+                "balance_perturbations",
+            ):
+                setattr(saved_env, name, copy.deepcopy(getattr(cfg, name)))
+            cfg = saved_env
+    return cfg, train_cfg
 
 
 def plots(rows, out, label):
@@ -191,6 +214,16 @@ def main():
     parser.add_argument(
         "--checkpoint", type=Path, help="Compatible Go2 balance/reachability checkpoint"
     )
+    parser.add_argument("--config_task", choices=["go2balance", "go2reachability"])
+    parser.add_argument(
+        "--current_cfg",
+        action="store_true",
+        help="Explicitly use current configs instead of the saved run",
+    )
+    parser.add_argument("--cpg", action="store_true")
+    parser.add_argument(
+        "--contact_modes", nargs=4, choices=["phase", "stance", "swing", "ignore"]
+    )
     parser.add_argument(
         "--samples", type=int, default=64, help="Samples per curriculum level"
     )
@@ -200,18 +233,25 @@ def main():
         "--output", type=Path, default=Path("output_backwards_reachability")
     )
     args = parser.parse_args()
-    if args.samples < 1 or args.seconds < 2.1:
+    if args.samples < 1 or not math.isfinite(args.seconds) or args.seconds < 2.1:
         parser.error(
             "samples must be positive and seconds >= 2.1 (two-second success hold)"
         )
     torch.set_num_threads(1)
     set_seed(args.seed)
-    cfg, train_cfg = Go2ReachabilityCfg(), Go2ReachabilityRunnerCfg()
+    cfg, train_cfg = evaluation_configs(
+        args.checkpoint, args.config_task, args.current_cfg
+    )
+    configure_contact_cpg(args, cfg, train_cfg)
+    if args.seconds <= cfg.handstand_curriculum.hold_seconds:
+        parser.error("--seconds must exceed the saved recovery hold duration")
     cfg.seed = args.seed
     cfg.env.num_envs = args.samples
     cfg.handstand_curriculum.replay_fraction = 0
     cfg.handstand_curriculum.enabled = True
     cfg.handstand_curriculum.min_episodes = 10**12
+    cfg.env.episode_length_s = max(cfg.env.episode_length_s, args.seconds + 1)
+    train_cfg.runner.device = "cpu"
     task_registry.convert_frequencies_to_params(cfg, train_cfg)
     backend = MuJocoCPUBackend()
     env = Go2Reachability(cfg, "cpu", True, backend)
@@ -319,6 +359,10 @@ def main():
             controller=label,
             seed=args.seed,
             horizon_seconds=args.seconds,
+            hold_seconds=cfg.handstand_curriculum.hold_seconds,
+            position_fraction=list(cfg.reachability.position_fraction),
+            velocity_fraction=list(cfg.reachability.velocity_fraction),
+            cpg_enabled=getattr(cfg.contact_cpg, "enabled", False),
             checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest()
             if args.checkpoint
             else None,

@@ -8,6 +8,9 @@ The selected backend is MuJoCo CPU/Warp or optional VSim.
 """
 
 import argparse
+import copy
+import json
+from pathlib import Path
 
 from gym.utils.robot_metrics import (
     add_robot_options,
@@ -16,13 +19,18 @@ from gym.utils.robot_metrics import (
 )
 
 from gym.utils.task_registry import task_registry
-from gym.utils.helpers import randomize_episode_counters, set_seed
+from gym.utils.helpers import class_to_dict, randomize_episode_counters, set_seed
 from gym.utils.logging_and_saving import local_code_save_helper
 from gym.utils.logging_and_saving import wandb_singleton
 
 
 def make_train_parser():
     parser = argparse.ArgumentParser(description="Train a Q2 task")
+    parser.add_argument(
+        "--warm_start_task",
+        help="Load policy interface/control settings from this checkpoint task; "
+        "required for automatic config transfer from older runs.",
+    )
     parser.add_argument(
         "--task", type=str, required=True, help="Task name (e.g. pendulum)"
     )
@@ -104,6 +112,8 @@ def get_train_args(argv=None):
     args = parser.parse_args(argv)
     if args.warm_start and args.resume:
         parser.error("choose --warm_start or --resume")
+    if args.warm_start_task and not args.warm_start:
+        parser.error("--warm_start_task requires --warm_start")
     return args
 
 
@@ -125,6 +135,26 @@ def setup(args=None, env_cfg=None, train_cfg=None):
         )
     elif args.original_cfg:
         raise ValueError("original_cfg cannot be combined with supplied configs")
+
+    if args.warm_start and (
+        args.warm_start_task
+        or (Path(args.warm_start).parent / "effective_config.json").is_file()
+    ):
+        from gym.utils.original_cfg import checkpoint_configs
+
+        saved_env, saved_train = checkpoint_configs(
+            args.warm_start, args.warm_start_task
+        )
+        # Keep the new task's rewards and curriculum, but preserve the learned
+        # observation/action interface, network architecture and motor settings.
+        for name in ("contact_cpg", "scaling", "control"):
+            if hasattr(saved_env, name):
+                setattr(env_cfg, name, copy.deepcopy(getattr(saved_env, name)))
+        for name in ("actor", "critic"):
+            target = getattr(train_cfg, name)
+            for key, value in class_to_dict(getattr(saved_train, name)).items():
+                if key != "reward":
+                    setattr(target, key, copy.deepcopy(value))
 
     configure_contact_cpg(args, env_cfg, train_cfg)
 
@@ -195,6 +225,17 @@ def setup(args=None, env_cfg=None, train_cfg=None):
         original_cfg_source_dir=(
             train_cfg._original_cfg_source_dir if args.original_cfg else None
         ),
+    )
+    (Path(train_cfg.log_dir) / "effective_config.json").write_text(
+        json.dumps(
+            {
+                "task": args.task,
+                "env": class_to_dict(env_cfg),
+                "train": class_to_dict(train_cfg),
+            },
+            indent=2,
+        )
+        + "\n"
     )
 
     attach_robot_metrics(env, args)

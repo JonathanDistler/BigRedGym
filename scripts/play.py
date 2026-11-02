@@ -109,7 +109,9 @@ def setup(args):
 
     # Play-time overrides — small batch, long episodes, no pushes.
     env_cfg.env.num_envs = args.num_envs
-    env_cfg.env.episode_length_s = 50
+    env_cfg.env.episode_length_s = max(50, getattr(args, "seconds", 0) + 1)
+    if getattr(args, "survival", False) and hasattr(env_cfg, "balance_perturbations"):
+        env_cfg.balance_perturbations.enabled = getattr(args, "eval_pushes", False)
     if hasattr(env_cfg, "commands"):
         env_cfg.commands.resampling_time = 9999
     if hasattr(env_cfg, "push_robots"):
@@ -174,6 +176,7 @@ def setup(args):
     )
 
     runner = task_registry.make_alg_runner(env, train_cfg)
+    env.evaluation_checkpoint = str(checkpoint_path.resolve())
     runner.switch_to_eval()
     attach_robot_metrics(env, args)
     return env, runner

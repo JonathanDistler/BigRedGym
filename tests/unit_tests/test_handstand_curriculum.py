@@ -77,7 +77,7 @@ def test_curriculum_requires_two_successful_batches_and_excludes_replay(env):
     env._reset_level[:] = 0
     env.timed_out[:] = True
     env._best_hold[:] = 0
-    env._best_hold[:4] = 2.1
+    env._best_hold[:4] = c.hold_seconds + 0.1
     mask = torch.tensor([True] * 4 + [False] * 4)
     env._record_handstand_episodes(mask)
     assert env.curriculum_level == 0

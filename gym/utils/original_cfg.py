@@ -3,6 +3,7 @@
 import ast
 import importlib
 import importlib.machinery
+import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -261,7 +262,40 @@ def load_original_cfgs_from_run(task_name: str, run_dir: str | Path):
         env_cfg = env_cfg_class()
         train_cfg = train_cfg_class()
 
+    runtime_path = run_dir / "effective_config.json"
+    if runtime_path.is_file():
+        runtime = json.loads(runtime_path.read_text())
+        if runtime["task"] != task_name:
+            raise OriginalCfgError(
+                f"Run contains task {runtime['task']!r}, requested {task_name!r}"
+            )
+        apply_config_dict(env_cfg, runtime["env"])
+        apply_config_dict(train_cfg, runtime["train"])
     return env_cfg, train_cfg
+
+
+def apply_config_dict(obj, values):
+    """Overlay JSON values while preserving instantiated nested config objects."""
+    for key, value in values.items():
+        current = getattr(obj, key, None)
+        if isinstance(value, dict) and hasattr(current, "__dict__"):
+            apply_config_dict(current, value)
+        else:
+            setattr(obj, key, value)
+
+
+def checkpoint_configs(checkpoint, task=None):
+    """Load the source snapshot and effective CLI settings beside a checkpoint."""
+    run_dir = Path(checkpoint).resolve().parent
+    runtime_path = run_dir / "effective_config.json"
+    if task is None and runtime_path.is_file():
+        task = json.loads(runtime_path.read_text())["task"]
+    if task is None:
+        raise OriginalCfgError(
+            "Older checkpoints require --config_task (or --warm_start_task), "
+            "e.g. go2balance. Keep the run's files/ directory beside the model."
+        )
+    return load_original_cfgs_from_run(task, run_dir)
 
 
 def load_original_cfgs(

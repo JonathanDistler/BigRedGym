@@ -14,7 +14,8 @@ uv run python -m scripts.train_backwards_reachability \
 
 Or train from scratch with `uv run python -m scripts.train --task go2reachability --device cpu --num_envs 32 --headless --disable_wandb`. Resume with the normal `--resume --load_run ...` flags. This task currently requires MuJoCo CPU; it deliberately fails for GPU/Warp or VSim rather than approximating contact validation. Start with modest environment counts because rejection sampling uses scratch forward simulations.
 
-The curriculum increases position-travel and velocity-envelope fractions through 0, .05, .15, .35, .65, 1. Promotion requires >=70% successful completed primary episodes over 128 episodes, twice consecutively. Twenty percent easier-level replay prevents forgetting. Exhausted rejection sampling falls back to goal replay and cannot promote the curriculum. Curriculum progress is checkpointed by the existing runner.
+The curriculum increases position-travel and velocity-envelope fractions through position fractions 0, .025, .05, .10, .15, .25 and velocity fractions
+0, 0, .01, .025, .05, .10. Promotion requires >=70% successful completed primary episodes over 128 episodes, twice consecutively. Twenty percent easier-level replay prevents forgetting. Exhausted rejection sampling falls back to goal replay and cannot promote the curriculum. Curriculum progress is checkpointed by the existing runner.
 
 ## Torque and speed derivation
 
@@ -50,6 +51,12 @@ Without `--checkpoint`, evaluation uses fixed goal-posture PD and labels the plo
 
 Success requires acceptance, a two-second strict hold, and no termination anywhere in the evaluation horizon. These statistics characterize the sampled distribution. They do not measure uniform state-space volume or certify an exact backward reachable set, and the set need not be convex or conical. More samples, repeated seeds, longer horizons and independent full-state slices are required before drawing a reliable boundary. Rejected proposal coordinates are not part of the plotted recovery set; gray marks show their fallback goal replay states.
 
-The initial `pd_baseline/` artifacts contain 16 samples per level over a 3 s horizon. Root artifacts evaluate the existing balance checkpoint; they assess that policy before reachability training. Run the command above after training to replace them with the expanded policy's measured recovery region.
+The initial `pd_baseline/` artifacts contain 16 samples per level over a 3 s horizon. Root artifacts evaluate the existing balance checkpoint; they assess that policy before reachability training. Use a separate `--output` directory after training to compare the expanded policy's measured recovery region.
 
 An empirical target set can be defined as R(T, p) = {x: P_pi(two-second strict hold before T, with support retained throughout T | x) >= p}. Here x contains all joint positions and velocities, body state and fixed contact mode. A deterministic simulation yields binary membership per tested x; the per-level Wilson intervals estimate probabilities over the reset distribution, not confidence that every point in a projected region is recoverable. The plots deliberately avoid fitting a cone or convex hull across untested holes.
+
+See [the training walkthrough](../TRAINING_RECOVERY.md) for CPG configuration
+loading, older-checkpoint flags, long-duration evaluation and the updated curriculum.
+New checkpoints load effective settings automatically; older checkpoints require
+`--config_task go2balance` or `--config_task go2reachability`, plus any original
+CLI-only CPG flags.

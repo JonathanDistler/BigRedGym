@@ -5,10 +5,13 @@ reported separately because base-contact termination can miss crawling.
 """
 
 import sys
+import argparse
+import math
 
 import torch
 
 from scripts.play import get_play_args, setup
+from gym.utils.survival_evaluation import evaluate_survival
 
 
 @torch.inference_mode()
@@ -85,10 +88,22 @@ def evaluate(env, runner, seconds=5.0, height=None):
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--seconds", type=float, default=5.0)
+    parser.add_argument("--survival", action="store_true")
+    parser.add_argument("--eval_pushes", action="store_true")
+    evaluation_args, argv = parser.parse_known_args(argv)
+    if not math.isfinite(evaluation_args.seconds) or evaluation_args.seconds <= 0:
+        parser.error("--seconds must be positive")
     height_sweep = "--height_sweep" in argv
     if height_sweep:
         argv.remove("--height_sweep")
     args = get_play_args(argv)
+    args.seconds = evaluation_args.seconds
+    args.survival = evaluation_args.survival
+    args.eval_pushes = evaluation_args.eval_pushes
+    if args.survival and height_sweep:
+        parser.error("--survival and --height_sweep cannot be combined")
     args.headless = True
     if args.seed is None:
         args.seed = 42
@@ -98,12 +113,17 @@ if __name__ == "__main__":
         try:
             if not hasattr(env, "root_states"):
                 raise ValueError("Evaluation requires a legged robot task")
-            if height_sweep:
+            if args.survival:
+                evaluate_survival(env, runner, seconds=args.seconds, seed=args.seed)
+            elif height_sweep:
                 lower, upper = env.command_ranges["base_height"]
                 for height in (lower, (lower + upper) / 2, upper):
                     env.reset()
-                    evaluate(env, runner, height=height)
+                    evaluate(env, runner, seconds=args.seconds, height=height)
             else:
-                evaluate(env, runner)
+                evaluate(env, runner, seconds=args.seconds)
         finally:
+            metrics = getattr(env, "robot_metrics", None)
+            if metrics is not None:
+                metrics.close()
             env._backend.close()

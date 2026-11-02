@@ -1,5 +1,7 @@
 """Top balance references, shaping signals, diagnostics and perturbation gates."""
 
+import math
+
 import pytest
 import torch
 
@@ -86,6 +88,7 @@ def test_all_balance_rewards_and_diagnostics_are_finite(env):
 
 
 def test_impulses_require_advanced_level_schedule_and_settled_hold(env):
+    interval = math.ceil(env.cfg.balance_perturbations.interval_s / env.dt)
     env.cfg.balance_perturbations.undisturbed_fraction = 0
     mask = torch.ones(2, dtype=torch.bool)
     env.curriculum_level = 0
@@ -106,11 +109,11 @@ def test_impulses_require_advanced_level_schedule_and_settled_hold(env):
     # It must not invalidate the eligibility of episodes awaiting a push.
     env._record_handstand_episodes(torch.zeros(2, dtype=torch.bool))
     assert env._primary_reset.all()
-    env.episode_length_buf[:] = 299
+    env.episode_length_buf[:] = interval - 1
     before = env.root_states[:, 7:9].clone()
     env._pre_decimation_step()
     torch.testing.assert_close(env.root_states[:, 7:9], before)
-    env.episode_length_buf[:] = 300
+    env.episode_length_buf[:] = interval
     env._pre_decimation_step()
     delta = env.root_states[:, 7:9] - before
     assert delta[0].norm().item() == pytest.approx(0.03, abs=1e-6)
@@ -118,7 +121,7 @@ def test_impulses_require_advanced_level_schedule_and_settled_hold(env):
     assert env._best_hold[0].item() == 0
     assert env._hold_time[0].item() == 0
     assert env._push_count.tolist() == [1, 0]
-    env.episode_length_buf[:] = 600
+    env.episode_length_buf[:] = 2 * interval
     env._hold_time[:] = 1
     before = env.root_states[:, 7:9].clone()
     env._pre_decimation_step()
@@ -150,13 +153,13 @@ def test_push_level_promotes_only_after_actual_push_and_recovery(env):
         env._reset_idx(mask)
         env.terminated.zero_()
         env.timed_out.zero_()
-        env.episode_length_buf[:] = 300
+        env.episode_length_buf[:] = math.ceil(p.interval_s / env.dt)
         env._hold_time[:] = 1
         env._pre_decimation_step()
         assert env._push_count.tolist() == [1, 1]
         assert torch.all(env._best_hold == 0)
         # Stand in for a subsequent continuous strict hold after the impulse.
-        env._best_hold[:] = 2.1
+        env._best_hold[:] = c.hold_seconds + 0.1
         env.timed_out[:] = True
         env._record_handstand_episodes(mask)
         # Avoid recording the same synthetic completed episodes again.
@@ -190,3 +193,47 @@ def test_perturbation_curriculum_state_round_trips(env):
     assert env.curriculum_level == 3
     assert env.curriculum_success_rate == 0.75
     assert env.handstand_stage.tolist() == [2, 2]
+
+
+def test_hold_followed_by_fall_cannot_promote(env):
+    env._best_hold[:] = env.cfg.handstand_curriculum.hold_seconds + 1
+    env.terminated[:] = True
+    env._record_handstand_episodes(torch.ones(2, dtype=torch.bool))
+    assert env._curriculum_successes == 0
+
+
+def test_front_contact_loss_requires_persistence_and_resets(env):
+    env._reset_idx(torch.ones(2, dtype=torch.bool))
+    env.episode_length_buf[:] = 0
+    env.contact_forces.zero_()
+    env._post_decimation_step()
+    assert torch.all(env._front_airborne_time == 0)
+    env.episode_length_buf[:] = 100
+    # One supported foot suffices; only sustained loss of both ends the trial.
+    env.contact_forces[1, env.feet_indices[0], 2] = 10
+    steps = math.ceil(env.cfg.balance_failure.both_front_airborne_seconds / env.dt)
+    for _ in range(steps - 1):
+        env._post_decimation_step()
+    env.terminated.zero_()
+    env._check_terminations_and_timeouts()
+    assert not env.terminated.any()
+    env._post_decimation_step()
+    env._check_terminations_and_timeouts()
+    assert env.terminated.tolist() == [True, False]
+    env._reset_idx(torch.tensor([True, False]))
+    assert env._front_airborne_time[0] == 0
+    env._front_airborne_time[:] = 0.06
+    env.contact_forces[:, env.feet_indices[0], 2] = 10
+    env._post_decimation_step()
+    assert torch.all(env._front_airborne_time == 0)
+
+
+def test_fall_cost_is_independent_of_timestep_and_excludes_timeouts(env):
+    weight = Go2BalanceRunnerCfg.critic.reward.termination_weight.termination
+    env.terminated[:] = torch.tensor([True, False])
+    env.timed_out[:] = torch.tensor([False, True])
+    for dt in (0.01, 0.02):
+        env.dt = dt
+        torch.testing.assert_close(
+            env._reward_termination() * weight * dt, torch.tensor([-20.0, 0.0])
+        )

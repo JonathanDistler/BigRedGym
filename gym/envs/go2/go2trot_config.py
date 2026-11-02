@@ -3,7 +3,7 @@ from gym.envs.go2.go2_config import Go2Cfg, Go2RunnerCfg, LEG_LENGTH, FOOT_RADIU
 
 class Go2TrotCfg(Go2Cfg):
     class env(Go2Cfg.env):
-        episode_length_s = 5
+        episode_length_s = 16 # had been 5 s
 
     class init_state(Go2Cfg.init_state):
         # Policy targets are offsets from this static nominal posture.

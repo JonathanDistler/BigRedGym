@@ -32,6 +32,11 @@ class Go2BalanceCfg(Go2HandstandCfg):
         settled_hold_s = 0.5
         undisturbed_fraction = 0.25
 
+    class balance_failure:
+        min_normal_force = 1.0  # newtons per front foot
+        contact_grace_seconds = 0.15
+        both_front_airborne_seconds = 0.10
+
     class push_robots(Go2HandstandCfg.push_robots):
         toggle = False  # use the gated balance perturbations instead
 
@@ -62,7 +67,7 @@ class Go2BalanceRunnerCfg(Go2HandstandRunnerCfg):
                 collision = 1.0
 
             class termination_weight:
-                termination = 2.0
+                termination = 20.0  # event cost; reward cancels runner dt scaling
 
     class runner(Go2HandstandRunnerCfg.runner):
         experiment_name = "go2balance"

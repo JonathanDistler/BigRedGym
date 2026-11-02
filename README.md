@@ -314,7 +314,8 @@ uv run --frozen --extra gpu --no-dev scripts/train.py --task go2balance \
 
 Orientation, front-foot support/load sharing, rear clearance, and stability
 provide separate shaping rewards. The original multiplicative balance score
-still defines success: score ≥0.5 continuously for two seconds, without a fall.
+still defines success: score ≥0.5 continuously for five seconds, with no later fall in the episode.
+Episodes last 45 seconds.
 Higher shaping reward alone cannot promote the curriculum.
 
 | Level | Reset tilt | Initial angular velocity per axis | Horizontal impulse |
@@ -325,7 +326,7 @@ Higher shaping reward alone cannot promote the curriculum.
 | 3 | ±3° | ±0.03 rad/s | 0.03 m/s delta velocity |
 | 4 | ±5° | ±0.06 rad/s | 0.06 m/s delta velocity |
 
-Two consecutive batches of at least 128 completed primary episodes with ≥70%
+Two consecutive batches of at least 128 completed primary episodes with ≥90%
 strict-hold success advance a level. From level 1, 20% easier replay is retained.
 At push levels, 25% of episodes remain undisturbed and cannot promote that
 level. One impulse is attempted on a three-second schedule, only after a 0.5 s
@@ -378,3 +379,6 @@ Next extensions are explicit center-of-mass alignment over the front-foot
 support segment and a controlled return to four feet. Reset geometry and
 curriculum mechanics have CPU tests; learning performance and GPU training
 still require a training run.
+
+For longer-hold training, CPG checkpoint transfer, 60-second survival diagnostics,
+and rear-leg recovery training, see [TRAINING_RECOVERY.md](TRAINING_RECOVERY.md).

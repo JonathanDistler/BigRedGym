@@ -64,8 +64,8 @@ class Go2Balance(Go2Handstand):
         if (
             any(v < 0 or not math.isfinite(v) for v in p.max_delta_velocity)
             or not math.isfinite(p.interval_s)
-            or p.interval_s <= c.hold_seconds
-            or p.interval_s + c.hold_seconds >= self.max_episode_length_s
+            or p.interval_s <= 0
+            or (p.enabled and p.interval_s + c.hold_seconds >= self.max_episode_length_s)
             or not math.isfinite(p.settled_hold_s)
             or p.settled_hold_s < 0
             or not 0 <= p.undisturbed_fraction < 1
@@ -75,6 +75,7 @@ class Go2Balance(Go2Handstand):
         self._episode_push_limit = torch.zeros(self.num_envs, device=self.device)
         self._push_count = torch.zeros(self.num_envs, device=self.device)
         self._last_push = torch.zeros(self.num_envs, device=self.device)
+        self._front_airborne_time = torch.zeros(self.num_envs, device=self.device)
         self.training_diagnostics = BalanceDiagnostics(self.device)
         knee = self.cfg.reward_settings.kick_knee_target
         front = [0.0, -math.pi / 2 - knee / 2, knee]
@@ -90,6 +91,7 @@ class Go2Balance(Go2Handstand):
 
     def _reset_idx(self, reset_mask):
         super()._reset_idx(reset_mask)
+        self._front_airborne_time[reset_mask] = 0
         p = self.cfg.balance_perturbations
         limits = self._push_table[self._reset_level.clamp(min=0)]
         disturbed = (
@@ -105,6 +107,8 @@ class Go2Balance(Go2Handstand):
         self._last_push[reset_mask] = 0
 
     def _record_handstand_episodes(self, reset_mask):
+        # An early hold followed by a fall must not promote long-hold training.
+        self._best_hold[reset_mask & self.terminated] = 0
         if hasattr(self, "_push_count"):
             # A challenged episode ending before its first push is a failure,
             # not an excluded sample or a successful pre-push hold.
@@ -143,6 +147,28 @@ class Go2Balance(Go2Handstand):
         # A hold achieved before the push is not a successful recovery.
         self._hold_time[eligible] = 0
         self._best_hold[eligible] = 0
+
+    def _post_decimation_step(self):
+        super()._post_decimation_step()
+        c = self.cfg.balance_failure
+        loads = self.contact_forces[:, self.feet_indices[:2], 2]
+        airborne = (loads < c.min_normal_force).all(dim=1)
+        active = self.episode_length_buf * self.dt >= c.contact_grace_seconds
+        self._front_airborne_time[:] = torch.where(
+            active & airborne, self._front_airborne_time + self.dt, 0.0
+        )
+
+    def _check_terminations_and_timeouts(self):
+        super()._check_terminations_and_timeouts()
+        self.terminated |= (
+            self._front_airborne_time + 1e-7
+            >= self.cfg.balance_failure.both_front_airborne_seconds
+        )
+
+    def _reward_termination(self):
+        # The runner multiplies all rewards by dt. Falls are discrete events,
+        # so keep their configured cost independent of the control frequency.
+        return -self.terminated.float() / self.dt
 
     def _reward_balance_orientation(self):
         return self._handstand_balance_components()["vertical"]

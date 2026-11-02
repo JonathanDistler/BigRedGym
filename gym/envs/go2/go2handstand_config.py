@@ -20,7 +20,7 @@ class Go2HandstandCfg(Go2Cfg):
         ground_clearance = 0.003
         replay_fraction = 0.2
         standing_fraction = 0.1
-        hold_seconds = 2.0
+        hold_seconds = 4.0 #had previously been 2
         hold_score = 0.5
         min_episodes = 128
         success_fraction = 0.7

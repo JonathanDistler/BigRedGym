@@ -1,4 +1,5 @@
 import sys
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -72,6 +73,28 @@ def test_saved_configs_load_complete_inheritance_without_leaking_modules(tmp_pat
     assert sys.modules["gym.envs"] is current_envs
     assert "gym.envs.demo.saved_config" not in sys.modules
     assert "gym.envs.demo.parent_config" not in sys.modules
+
+
+def test_effective_cli_settings_override_source_snapshot(tmp_path):
+    _write_saved_config_snapshot(tmp_path)
+    (tmp_path / "effective_config.json").write_text(
+        json.dumps(
+            {
+                "task": "demo",
+                "env": {"source": "effective CLI settings"},
+                "train": {"runner": {"experiment_name": "effective_experiment"}},
+            }
+        )
+    )
+    env, train = original_cfg.checkpoint_configs(tmp_path / "model_1.pt")
+    assert env.source == "effective CLI settings"
+    assert train.runner.experiment_name == "effective_experiment"
+    runtime_path = tmp_path / "effective_config.json"
+    values = json.loads(runtime_path.read_text())
+    values["task"] = "other"
+    runtime_path.write_text(json.dumps(values))
+    with pytest.raises(OriginalCfgError, match="requested"):
+        load_original_cfgs_from_run("demo", tmp_path)
 
 
 def test_registry_resolves_and_pins_the_original_config_run(tmp_path, monkeypatch):
