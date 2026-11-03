@@ -75,7 +75,8 @@ class Go2Balance(Go2Handstand):
         self._episode_push_limit = torch.zeros(self.num_envs, device=self.device)
         self._push_count = torch.zeros(self.num_envs, device=self.device)
         self._last_push = torch.zeros(self.num_envs, device=self.device)
-        self._front_airborne_time = torch.zeros(self.num_envs, device=self.device)
+        self._body_contact_time = torch.zeros(self.num_envs, device=self.device)
+        self._collapse_time = torch.zeros(self.num_envs, device=self.device)
         self.training_diagnostics = BalanceDiagnostics(self.device)
         knee = self.cfg.reward_settings.kick_knee_target
         front = [0.0, -math.pi / 2 - knee / 2, knee]
@@ -91,7 +92,8 @@ class Go2Balance(Go2Handstand):
 
     def _reset_idx(self, reset_mask):
         super()._reset_idx(reset_mask)
-        self._front_airborne_time[reset_mask] = 0
+        self._body_contact_time[reset_mask] = 0
+        self._collapse_time[reset_mask] = 0
         p = self.cfg.balance_perturbations
         limits = self._push_table[self._reset_level.clamp(min=0)]
         disturbed = (
@@ -151,19 +153,46 @@ class Go2Balance(Go2Handstand):
     def _post_decimation_step(self):
         super()._post_decimation_step()
         c = self.cfg.balance_failure
-        loads = self.contact_forces[:, self.feet_indices[:2], 2]
-        airborne = (loads < c.min_normal_force).all(dim=1)
         active = self.episode_length_buf * self.dt >= c.contact_grace_seconds
-        self._front_airborne_time[:] = torch.where(
-            active & airborne, self._front_airborne_time + self.dt, 0.0
+        collapsed = self.root_states[:, 2] < self.cfg.env.min_base_height
+        self._body_contact_time[:] = torch.where(
+            active & self._body_contact(), self._body_contact_time + self.dt, 0.0
+        )
+        self._collapse_time[:] = torch.where(
+            active & collapsed, self._collapse_time + self.dt, 0.0
         )
 
+    def _body_contact(self):
+        forces = self.contact_forces[:, self.termination_contact_indices]
+        return (forces.norm(dim=-1) > self.cfg.balance_failure.body_contact_force).any(dim=1)
+
     def _check_terminations_and_timeouts(self):
-        super()._check_terminations_and_timeouts()
-        self.terminated |= (
-            self._front_airborne_time + 1e-7
-            >= self.cfg.balance_failure.both_front_airborne_seconds
-        )
+        # Replace the base task's instantaneous contact/height checks with
+        # continuous failure timers. Foot unloading and slip never terminate.
+        c = self.cfg.balance_failure
+        self.timed_out = self.episode_length_buf >= self.max_episode_length
+        self.terminated |= (self._body_contact_time + 1e-7 >= c.body_contact_seconds)
+        self.terminated |= (self._collapse_time + 1e-7 >= c.collapse_seconds)
+
+    def _valid_handstand(self):
+        speed = self._rigid_body_lin_vel[:, self.feet_indices[:2], :2].norm(dim=-1)
+        supported = (self._handstand_loads()[:, :2] >= self.cfg.reward_settings.min_front_load).all(dim=1)
+        return supported & (speed <= self.cfg.reward_settings.valid_front_speed).all(dim=1) & ~self._body_contact()
+
+    def _reward_handstand_balance(self):
+        return super()._reward_handstand_balance() * self._valid_handstand()
+
+    def _reward_balance_sustained(self):
+        valid = self._reward_handstand_balance() >= self.cfg.handstand_curriculum.hold_score
+        ramp = (self._hold_time / self.cfg.reward_settings.sustained_ramp_s).clamp(0, 1)
+        return valid * ramp
+
+    def _reward_balance_front_unloading(self):
+        loads = self._handstand_loads()[:, :2]
+        return -(1 - loads / self.cfg.reward_settings.min_front_load).clamp(0, 1).mean(dim=1)
+
+    def _reward_balance_body_contact(self):
+        return -self._body_contact().float()
 
     def _reward_termination(self):
         # The runner multiplies all rewards by dt. Falls are discrete events,

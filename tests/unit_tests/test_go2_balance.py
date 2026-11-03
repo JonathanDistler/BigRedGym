@@ -49,6 +49,8 @@ def test_dense_shaping_survives_one_failed_component_but_strict_score_does_not()
     original = task()
     env = Go2Balance.__new__(Go2Balance)
     env.__dict__.update(original.__dict__)
+    env.cfg = Go2BalanceCfg()
+    env.termination_contact_indices = torch.tensor([], dtype=torch.long)
     env.handstand_stage[:] = 2
     env.dof_pos[:, [8, 11]] = -2.0
     assert env._reward_handstand_balance().item() < 0.01
@@ -202,30 +204,74 @@ def test_hold_followed_by_fall_cannot_promote(env):
     assert env._curriculum_successes == 0
 
 
-def test_front_contact_loss_requires_persistence_and_resets(env):
-    env._reset_idx(torch.ones(2, dtype=torch.bool))
-    env.episode_length_buf[:] = 0
-    env.contact_forces.zero_()
-    env._post_decimation_step()
-    assert torch.all(env._front_airborne_time == 0)
+def test_unloading_and_slip_are_penalties_without_termination(env):
     env.episode_length_buf[:] = 100
-    # One supported foot suffices; only sustained loss of both ends the trial.
-    env.contact_forces[1, env.feet_indices[0], 2] = 10
-    steps = math.ceil(env.cfg.balance_failure.both_front_airborne_seconds / env.dt)
+    env.contact_forces.zero_()
+    env._rigid_body_lin_vel[:, env.feet_indices[:2], :2] = 1
+    for _ in range(40):
+        env._post_decimation_step()
+        env._check_terminations_and_timeouts()
+    assert not env.terminated.any()
+    assert torch.all(env._reward_balance_front_unloading() < 0)
+    env.contact_forces[:, env.feet_indices[:2], 2] = 49.05
+    assert torch.all(env._reward_handstand_slip() < 0)
+    assert torch.all(env._reward_handstand_balance() == 0)
+
+
+@pytest.mark.parametrize("failure", ["contact", "collapse"])
+def test_failure_requires_continuous_grace_and_resets(env, failure):
+    env.contact_forces.zero_()
+    env.episode_length_buf[:] = 0
+    if failure == "contact":
+        env.contact_forces[:, env.termination_contact_indices, 2] = 10
+        timer = env._body_contact_time
+        duration = env.cfg.balance_failure.body_contact_seconds
+    else:
+        env.root_states[:, 2] = 0.05
+        timer = env._collapse_time
+        duration = env.cfg.balance_failure.collapse_seconds
+    env._post_decimation_step()
+    assert torch.all(timer == 0)
+    env.episode_length_buf[:] = 100
+    steps = math.ceil(duration / env.dt)
     for _ in range(steps - 1):
         env._post_decimation_step()
-    env.terminated.zero_()
     env._check_terminations_and_timeouts()
     assert not env.terminated.any()
+    # A recovered frame clears the continuous timer.
+    forces = env.contact_forces.clone()
+    height = env.root_states[:, 2].clone()
+    env.contact_forces.zero_()
+    env.root_states[:, 2] = 0.5
     env._post_decimation_step()
+    assert torch.all(timer == 0)
+    env.contact_forces[:] = forces
+    env.root_states[:, 2] = height
+    for _ in range(steps):
+        env._post_decimation_step()
     env._check_terminations_and_timeouts()
-    assert env.terminated.tolist() == [True, False]
+    assert env.terminated.all()
     env._reset_idx(torch.tensor([True, False]))
-    assert env._front_airborne_time[0] == 0
-    env._front_airborne_time[:] = 0.06
-    env.contact_forces[:, env.feet_indices[0], 2] = 10
-    env._post_decimation_step()
-    assert torch.all(env._front_airborne_time == 0)
+    assert timer[0] == 0
+    assert timer[1] > 0
+
+
+def test_sustained_reward_requires_current_valid_hold(env):
+    env.contact_forces.zero_()
+    weight = 9.81 * env._backend.link_mass.sum(dim=1)
+    env.contact_forces[:, env.feet_indices[:2], 2] = weight[:, None] / 2
+    env.projected_gravity[:] = torch.tensor([1., 0., 0.])
+    env.base_lin_vel.zero_()
+    env.base_ang_vel.zero_()
+    env._rigid_body_lin_vel.zero_()
+    env._rigid_body_pos[:, env.feet_indices[:2], 2] = 0
+    env._rigid_body_pos[:, env.feet_indices[2:], 2] = 0.6
+    env._hold_time[:] = torch.tensor([0., 2.])
+    torch.testing.assert_close(env._reward_balance_sustained(), torch.tensor([0., 1.]))
+    env._rigid_body_lin_vel[:, env.feet_indices[:2], 0] = 0.2
+    assert torch.all(env._reward_balance_sustained() == 0)
+    env._update_handstand_hold()
+    assert torch.all(env._hold_time == 0)
 
 
 def test_fall_cost_is_independent_of_timestep_and_excludes_timeouts(env):

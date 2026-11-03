@@ -35,7 +35,13 @@ class Go2BalanceCfg(Go2HandstandCfg):
     class balance_failure:
         min_normal_force = 1.0  # newtons per front foot
         contact_grace_seconds = 0.15
-        both_front_airborne_seconds = 0.10
+        body_contact_seconds = 0.15
+        collapse_seconds = 0.25
+        body_contact_force = 1.0
+
+    class reward_settings(Go2HandstandCfg.reward_settings):
+        valid_front_speed = 0.08  # m/s, maximum speed for a valid hold
+        sustained_ramp_s = 2.0
 
     class push_robots(Go2HandstandCfg.push_robots):
         toggle = False  # use the gated balance perturbations instead
@@ -53,12 +59,15 @@ class Go2BalanceRunnerCfg(Go2HandstandRunnerCfg):
             class weights:
                 # Additive shaping supplies gradients when the strict product
                 # is near zero. Promotion still uses the original strict score.
-                balance_orientation = 2.0
-                balance_front_support = 2.0
-                balance_clearance = 1.0
-                balance_stability = 1.0
-                handstand_balance = 4.0
-                handstand_slip = 0.2
+                balance_orientation = 0.5
+                balance_front_support = 0.5
+                balance_clearance = 0.25
+                balance_stability = 0.25
+                handstand_balance = 10.0
+                balance_sustained = 40.0
+                balance_front_unloading = 2.0
+                balance_body_contact = 5.0
+                handstand_slip = 5.0
                 torques = 5e-6
                 action_rate = 0.1
                 action_rate2 = 0.01

@@ -315,6 +315,12 @@ uv run --frozen --extra gpu --no-dev scripts/train.py --task go2balance \
 Orientation, front-foot support/load sharing, rear clearance, and stability
 provide separate shaping rewards. The original multiplicative balance score
 still defines success: score ≥0.5 continuously for five seconds, with no later fall in the episode.
+Valid holds also require both front feet loaded, front-foot planar speeds ≤0.08 m/s,
+and no body contact. The strict score has weight 10; a separate valid-hold bonus
+ramps from 0 to weight 40 over two continuous seconds. Partial-pose shaping
+weights total only 1.5. Unloading and slip incur penalties without terminating.
+After a 0.15 s startup grace, continuous body contact for 0.15 s or base height
+below 0.12 m for 0.25 s terminates; a recovered frame clears each failure timer.
 Episodes last 45 seconds.
 Higher shaping reward alone cannot promote the curriculum.
 
@@ -329,7 +335,7 @@ Higher shaping reward alone cannot promote the curriculum.
 Two consecutive batches of at least 128 completed primary episodes with ≥90%
 strict-hold success advance a level. From level 1, 20% easier replay is retained.
 At push levels, 25% of episodes remain undisturbed and cannot promote that
-level. One impulse is attempted on a three-second schedule, only after a 0.5 s
+level. One impulse is attempted on a six-second schedule, only after a 0.5 s
 strict hold; no more than one is delivered per episode. It changes world-XY
 velocity in a random direction, with the listed bounded magnitude, rather than
 applying a force for a duration. A push resets the hold history. An episode
