@@ -45,10 +45,18 @@ def test_first_failure_is_latched_and_trace_is_bounded(tmp_path):
         env.terminated[0] = count == 15
         env._best_hold[:] = count / 10
         env.contact_forces[0, 1, 2] = 0 if count >= 14 else 10
+        env.contact_forces[1, 0, 2] = 0 if count == 3 or 6 <= count <= 9 else 10
 
     env.step = step
     runner = SimpleNamespace(
         actor_cfg={"actions": [], "disable_actions": False},
+        critic_cfg={
+            "reward": {"weights": {"alive": 1.0}, "termination_weight": {"fall": -20.0}}
+        },
+        get_rewards=lambda weights, modifier, mask: {
+            name: torch.ones(n) * weight * modifier * mask
+            for name, weight in weights.items()
+        },
         get_inference_actions=lambda: None,
         set_actions=lambda *args: None,
     )
@@ -57,6 +65,12 @@ def test_first_failure_is_latched_and_trace_is_bounded(tmp_path):
     assert report["trials"][0]["first_failure_s"] == pytest.approx(1.5)
     assert report["trials"][0]["best_hold_s"] == pytest.approx(1.5)
     assert report["trials"][0]["front_contact_loss_steps"] == 2
+    assert report["trials"][0]["front_contact_loss_events"] == 1
+    assert report["trials"][0]["front_contact_recoveries"] == 0
+    assert report["trials"][0]["episode_return"] == pytest.approx(-0.6)
+    assert report["trials"][1]["episode_return"] == pytest.approx(2)
+    assert report["trials"][1]["front_contact_loss_events"] == 2
+    assert report["trials"][1]["front_contact_recoveries"] == 1
     assert report["trials"][1]["first_failure_s"] is None
     assert report["trials"][1]["observed_seconds"] == 2
     trace = json.loads((tmp_path / "failure_env_0.json").read_text())

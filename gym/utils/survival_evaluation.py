@@ -27,11 +27,19 @@ def evaluate_survival(env, runner, seconds=60.0, seed=None, output=None):
             best_hold_s=0.0,
             front_contact_loss_steps=0,
             first_front_contact_loss_s=None,
+            front_contact_loss_events=0,
+            front_contact_recoveries=0,
+            episode_return=0.0,
         )
         for i in range(n)
     ]
     traces = [deque(maxlen=math.ceil(1 / env.dt) + 1) for _ in range(n)]
     steps = math.ceil(seconds / env.dt)
+    loss_duration = torch.zeros(n, device=env.device)
+    failure_cfg = getattr(env.cfg, "balance_failure", None)
+    contact_threshold = getattr(failure_cfg, "min_normal_force", 1.0)
+    grace = getattr(failure_cfg, "contact_grace_seconds", 0.03)
+    recovery_deadline = getattr(failure_cfg, "both_front_airborne_seconds", 0.25)
     for step in range(steps):
         active = ~failed
         runner.set_actions(
@@ -41,14 +49,43 @@ def evaluate_survival(env, runner, seconds=60.0, seed=None, output=None):
         )
         env.step()
         elapsed = (step + 1) * env.dt
-        lost = (env.contact_forces[:, env.feet_indices[:2], 2] < 1).any(dim=1)
+        lost = (env.contact_forces[:, env.feet_indices[:2], 2] < contact_threshold).any(
+            dim=1
+        )
+        started = active & lost & (loss_duration == 0) & (elapsed >= grace)
+        recovered = (
+            active
+            & ~lost
+            & (loss_duration > 0)
+            & (loss_duration < recovery_deadline)
+            & ~env.terminated
+        )
+        loss_duration = torch.where(
+            active & lost & (elapsed >= grace), loss_duration + env.dt, 0.0
+        )
+        reward_terms = runner.get_rewards(
+            runner.critic_cfg["reward"]["weights"],
+            modifier=env.dt,
+            mask=~env.terminated,
+        )
+        reward_terms.update(
+            runner.get_rewards(
+                runner.critic_cfg["reward"]["termination_weight"],
+                modifier=env.dt,
+                mask=env.terminated,
+            )
+        )
+        rewards = torch.stack(tuple(reward_terms.values())).sum(dim=0)
         # Export physical target angles, not the policy's residual action.
         targets = env._standing_posture() + env.dof_pos_target
         for i in active.nonzero().flatten().tolist():
             trial = trials[i]
             trial["observed_seconds"] = elapsed
+            trial["episode_return"] += float(rewards[i])
+            trial["front_contact_loss_events"] += int(started[i])
+            trial["front_contact_recoveries"] += int(recovered[i])
             trial["best_hold_s"] = max(trial["best_hold_s"], float(env._best_hold[i]))
-            if elapsed >= 0.03 and bool(lost[i]):
+            if elapsed >= grace and bool(lost[i]):
                 trial["front_contact_loss_steps"] += 1
                 if trial["first_front_contact_loss_s"] is None:
                     trial["first_front_contact_loss_s"] = elapsed

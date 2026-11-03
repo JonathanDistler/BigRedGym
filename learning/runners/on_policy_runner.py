@@ -94,6 +94,15 @@ class OnPolicyRunner(BaseRunner):
                         self.env.step()
                         # put reward integration here
                         self.update_rewards_dict(rewards_dict, step)
+                        record_rewards = getattr(
+                            self.env, "record_training_rewards", None
+                        )
+                        if record_rewards is not None:
+                            record_rewards(
+                                torch.stack(tuple(rewards_dict[step].values())).sum(
+                                    dim=0
+                                )
+                            )
                         if diagnostics is not None:
                             self.env.update_training_diagnostics()
 

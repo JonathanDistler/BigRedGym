@@ -7,13 +7,23 @@ class Go2ReachabilityCfg(Go2BalanceCfg):
     class env(Go2BalanceCfg.env):
         episode_length_s = 8
 
+    class balance_failure(Go2BalanceCfg.balance_failure):
+        # Allow a short recovery before treating loss of both front feet as a fall.
+        both_front_airborne_seconds = 0.25
+
+    class reward_settings(Go2BalanceCfg.reward_settings):
+        # Contact shaping targets meaningful weight bearing, independently of
+        # the 1 N threshold used to detect an airborne foot.
+        front_support_fraction = 0.25  # body weight per front foot
+        recovery_angular_sigma = 2.0  # rad/s; leave room for corrective rotation
+
     class reachability:
         # Fractions of joint travel and torque-work speed envelope, respectively.
         position_fraction = [0.0, 0.025, 0.05, 0.10, 0.15, 0.25]
         velocity_fraction = [0.0, 0.0, 0.01, 0.025, 0.05, 0.10]
         attempts = 24
         probe_seconds = 0.04
-        contact_grace_seconds = 0.03
+        # Screening limits apply to reset proposals, not live termination.
         min_normal_force = 1.0
         max_slip_speed = 0.15
 
@@ -31,5 +41,11 @@ class Go2ReachabilityCfg(Go2BalanceCfg):
 
 
 class Go2ReachabilityRunnerCfg(Go2BalanceRunnerCfg):
+    class critic(Go2BalanceRunnerCfg.critic):
+        class reward(Go2BalanceRunnerCfg.critic.reward):
+            class weights(Go2BalanceRunnerCfg.critic.reward.weights):
+                front_contact_loss = 1.0
+                reachability_stability = 0.25
+
     class runner(Go2BalanceRunnerCfg.runner):
         experiment_name = "go2reachability"

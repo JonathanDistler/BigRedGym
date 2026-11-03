@@ -89,7 +89,7 @@ def evaluate(env, runner, seconds=5.0, height=None):
 if __name__ == "__main__":
     argv = sys.argv[1:]
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--seconds", type=float, default=5.0)
+    parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--survival", action="store_true")
     parser.add_argument("--eval_pushes", action="store_true")
     evaluation_args, argv = parser.parse_known_args(argv)
