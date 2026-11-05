@@ -42,12 +42,14 @@ class Go2BalanceCfg(Go2HandstandCfg):
     class reward_settings(Go2HandstandCfg.reward_settings):
         valid_front_speed = 0.08  # m/s, maximum speed for a valid hold
         sustained_ramp_s = 2.0
+        rear_knee_deadband = 0.15  # rad; allow small balance corrections freely
+        rear_velocity_deadband = 1.0  # rad/s; damp excess motion, allow slow corrections
 
     class push_robots(Go2HandstandCfg.push_robots):
         toggle = False  # use the gated balance perturbations instead
 
     class scaling(Go2HandstandCfg.scaling):
-        dof_pos_target = 12 * [0.25]
+        dof_pos_target = 6 * [0.25] + 6 * [0.4]
 
 
 class Go2BalanceRunnerCfg(Go2HandstandRunnerCfg):
@@ -67,7 +69,8 @@ class Go2BalanceRunnerCfg(Go2HandstandRunnerCfg):
                 balance_sustained = 40.0
                 balance_front_unloading = 2.0
                 balance_body_contact = 5.0
-                handstand_slip = 5.0
+                handstand_slip = 20.0
+                balance_rear_motion = 0.02
                 torques = 5e-6
                 action_rate = 0.1
                 action_rate2 = 0.01

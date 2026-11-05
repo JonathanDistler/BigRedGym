@@ -74,6 +74,29 @@ def test_diagnostics_are_raw_rollout_means_and_reset_between_rollouts():
     assert diagnostics.vertical.item() == pytest.approx(1)
 
 
+def test_rear_freedom_has_deadband_but_fast_motion_costs(env):
+    env.dof_pos[:, [8, 11]] = env.cfg.reward_settings.kick_knee_target + 0.1
+    torch.testing.assert_close(env._rear_extension(), torch.ones(2, 2))
+    env.dof_pos[:, [8, 11]] += 0.5
+    assert torch.all(env._rear_extension() < 0.5)
+    env.dof_vel.zero_()
+    env.dof_vel[:, 6:] = 0.5
+    assert torch.all(env._reward_balance_rear_motion() == 0)
+    env.dof_vel[:, 6:] = 3.0
+    torch.testing.assert_close(env._reward_balance_rear_motion(), torch.full((2,), -4.0))
+
+
+def test_front_diagnostics_report_world_velocity_and_normal_load(env):
+    env._rigid_body_lin_vel[:, env.feet_indices[0]] = torch.tensor([0.3, 0.4, -0.2])
+    env.contact_forces[:, env.feet_indices[0], 2] = 42.0
+    env.update_training_diagnostics()
+    env.training_diagnostics.finish()
+    d = env.training_diagnostics
+    assert d.front_left_load_n.item() == pytest.approx(42)
+    assert d.front_left_slip_speed_m_s.item() == pytest.approx(0.5)
+    assert d.front_left_vz_m_s.item() == pytest.approx(-0.2)
+
+
 def test_all_balance_rewards_and_diagnostics_are_finite(env):
     for _ in range(5):
         env.step()

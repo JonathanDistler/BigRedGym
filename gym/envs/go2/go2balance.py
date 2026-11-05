@@ -22,6 +22,17 @@ class BalanceDiagnostics:
             "strict_score",
             "front_left_load",
             "front_right_load",
+            "front_left_load_n",
+            "front_right_load_n",
+            "front_left_vx_m_s",
+            "front_left_vy_m_s",
+            "front_left_vz_m_s",
+            "front_right_vx_m_s",
+            "front_right_vy_m_s",
+            "front_right_vz_m_s",
+            "front_left_slip_speed_m_s",
+            "front_right_slip_speed_m_s",
+            "rear_joint_speed_rad_s",
             "rear_load",
             "hold_seconds",
             "terminated",
@@ -202,6 +213,20 @@ class Go2Balance(Go2Handstand):
     def _reward_balance_orientation(self):
         return self._handstand_balance_components()["vertical"]
 
+    def _rear_extension(self):
+        # Keep the original extension preference outside a small free region.
+        s = self.cfg.reward_settings
+        joints = self.dof_pos.index_select(1, self.actuated_dof_indices)
+        error = (joints[:, [8, 11]] - s.kick_knee_target).abs()
+        error = (error - s.rear_knee_deadband).clamp(min=0)
+        return torch.exp(-(error / s.kick_knee_sigma).square())
+
+    def _reward_balance_rear_motion(self):
+        # Position freedom need not imply free rapid rear-leg cycling.
+        velocity = self.dof_vel.index_select(1, self.actuated_dof_indices)[:, 6:]
+        excess = (velocity.abs() - self.cfg.reward_settings.rear_velocity_deadband).clamp(min=0)
+        return -excess.square().mean(dim=1)
+
     def _reward_balance_front_support(self):
         c = self._handstand_balance_components()
         return c["support"] * c["sharing"] * c["rear_off"]
@@ -218,6 +243,8 @@ class Go2Balance(Go2Handstand):
         """Called on collected control steps, before the runner resets episodes."""
         values = self._handstand_balance_components()
         loads = self._handstand_loads()
+        velocity = self._rigid_body_lin_vel[:, self.feet_indices[:2]]
+        normal_load = self.contact_forces[:, self.feet_indices[:2], 2].clamp(min=0)
         values.update(
             strict_score=self._reward_handstand_balance(),
             front_left_load=loads[:, 0],
@@ -227,5 +254,13 @@ class Go2Balance(Go2Handstand):
             terminated=self.terminated,
             push_fraction=self._last_push > 0,
             push_delta_velocity=self._last_push,
+            front_left_load_n=normal_load[:, 0],
+            front_right_load_n=normal_load[:, 1],
+            front_left_slip_speed_m_s=velocity[:, 0, :2].norm(dim=-1),
+            front_right_slip_speed_m_s=velocity[:, 1, :2].norm(dim=-1),
+            rear_joint_speed_rad_s=self.dof_vel.index_select(1, self.actuated_dof_indices)[:, 6:].abs().mean(dim=1),
         )
+        for foot, index in (("left", 0), ("right", 1)):
+            for axis, component in enumerate("xyz"):
+                values[f"front_{foot}_v{component}_m_s"] = velocity[:, index, axis]
         self.training_diagnostics.update(values)
