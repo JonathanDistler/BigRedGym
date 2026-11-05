@@ -1,0 +1,16 @@
+{
+  "experiment": "go2balance_longhold",
+  "run": "Nov01_22-09-05_",
+  "checkpoint": "model_1500.pt",
+  "task": "go2balance",
+  "controller": "force-coupled CPG",
+  "contact_modes": [
+    "stance",
+    "stance",
+    "swing",
+    "swing"
+  ],
+  "training": "warm-start long-hold",
+  "expected_episode_seconds": 45,
+  "expected_hold_seconds": 5
+}
