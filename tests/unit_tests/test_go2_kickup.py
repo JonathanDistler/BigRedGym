@@ -1,79 +1,178 @@
-"""Kick-up support gates and residual reference integration."""
+"""Ground geometry, support, reset isolation and standing-start curriculum."""
 
 import pytest
 import torch
 
-from gym.envs.go2.go2kickup import Go2Kickup
 from gym.envs.go2.go2kickup_config import Go2KickupCfg, Go2KickupRunnerCfg
-from tests.unit_tests.test_go2_handstand import task
+from gym.envs.go2.go2_config import FOOT_RADIUS
+from gym.utils.helpers import class_to_dict
+from gym.utils.task_registry import task_registry
 
 
-def kick_task():
-    env = task()
-    env.__class__ = Go2Kickup
-    env.cfg = Go2KickupCfg()
-    env._front_anchor = torch.zeros(1, 2, 2)
-    env._front_anchor_valid = torch.ones(1, dtype=torch.bool)
-    env.handstand_stage[:] = 2
-    return env
+@pytest.fixture
+def env():
+    import gym.envs  # noqa: F401
 
-
-@pytest.mark.parametrize("failure", ["rear_low", "front_slip", "front_drift"])
-def test_success_rejects_motion_exploits(failure):
-    env = kick_task()
-    assert env._reward_handstand_balance().item() == pytest.approx(1)
-    if failure == "rear_low":
-        env._rigid_body_pos[:, 2, 2] = 0.05
-    elif failure == "front_slip":
-        env._rigid_body_lin_vel[:, 0, 0] = 0.2
-    else:
-        env._rigid_body_pos[:, 0, 0] = 0.2
-    assert env._reward_handstand_balance().item() == 0
-
-
-def test_kickup_mujoco_reference_rewards_and_partial_reset():
-    from gym.envs.base.mujoco_cpu_backend import MuJocoCPUBackend
-    from gym.utils.helpers import class_to_dict
-    from gym.utils.task_registry import task_registry
-
-    cfg = Go2KickupCfg()
+    cfg, runner = Go2KickupCfg(), Go2KickupRunnerCfg()
     cfg.env.num_envs = 2
     cfg.seed = 7
-    cfg.handstand_curriculum.replay_fraction = 0.0
-    cfg.handstand_curriculum.standing_fraction = 0.0
-    runner = Go2KickupRunnerCfg()
     task_registry.convert_frequencies_to_params(cfg, runner)
-    backend = MuJocoCPUBackend()
-    try:
-        env = Go2Kickup(cfg, "cpu", True, backend)
-        assert len(cfg.handstand_curriculum.pitch_degrees) == 7
-        env.curriculum_level = 6
-        env._reset_idx(torch.ones(2, dtype=torch.bool))
-        env.episode_length_buf[:] = 0
-        start = env._standing_posture().clone()
-        env.episode_length_buf[:] = round(cfg.kick_motion.crouch_seconds / env.dt)
-        crouch = env._standing_posture().clone()
-        env.episode_length_buf[:] = round(
-            (cfg.kick_motion.crouch_seconds + cfg.kick_motion.extend_seconds) / env.dt
-        )
-        thrust = env._standing_posture().clone()
-        assert (crouch[:, 2] < start[:, 2]).all()
-        assert (thrust[:, 8] > crouch[:, 8]).all()
-        assert torch.allclose(thrust[:, :6], crouch[:, :6])
-        for _ in range(5):
-            env.step()
-            env.update_training_diagnostics()
-        assert torch.isfinite(env.get_states(runner.actor.obs)).all()
-        for name in class_to_dict(runner.critic.reward.weights):
-            reward = getattr(env, "_reward_" + name)()
-            assert reward.shape == (2,)
-            assert torch.isfinite(reward).all()
-        env.curriculum_level = 0
-        env._reset_idx(torch.tensor([True, False]))
-        assert torch.allclose(env._standing_posture()[0], env.dof_pos[0])
-        assert torch.allclose(env.dof_pos_target[0], torch.zeros(12))
-        assert env._front_anchor_valid.tolist() == [False, True]
-        env.training_diagnostics.finish()
-        assert torch.isfinite(env.training_diagnostics.rear_foot_height_m)
-    finally:
-        backend.close()
+    task = task_registry.make_env(
+        "go2kickup", cfg, device="cpu", headless=True, backend="mujoco"
+    )
+    yield task
+    task._backend.close()
+
+
+def plant(env):
+    env.contact_forces.zero_()
+    env.contact_forces[:, env.feet_indices[:2], 2] = 60
+    env._rigid_body_lin_vel.zero_()
+    env._rigid_body_pos[:, env.feet_indices[:2], :2] = env._front_anchor
+    env._rigid_body_pos[:, env.feet_indices[2:], 2] = FOOT_RADIUS + 0.006
+    env.terminated.zero_()
+    env._support_failed.zero_()
+
+
+def test_clearance_uses_ground_and_both_feet(env):
+    plant(env)
+    assert torch.allclose(env._rear_clearance(), torch.full((2, 2), 0.006))
+    full = env._reward_kick_clearance().clone()
+    env._rigid_body_pos[0, env.feet_indices[2], 2] = FOOT_RADIUS
+    assert env._reward_kick_clearance()[0] < full[0] * 0.2
+    assert env._reward_kick_clearance()[1] == full[1]
+    # Folding knees cannot earn clearance with feet on the floor.
+    env.dof_pos[:, [8, 11]] = -2.5
+    env._rigid_body_pos[:, env.feet_indices[2:], 2] = FOOT_RADIUS
+    assert torch.equal(env._reward_kick_clearance(), torch.zeros(2))
+    env._rigid_body_pos[:, env.feet_indices[:2], 2] = 0.3
+    assert env._rear_clearance().max() == 0
+
+
+@pytest.mark.parametrize("failure", ["contact", "speed", "drift"])
+def test_support_gates_success_and_dense_reward(env, failure):
+    plant(env)
+    assert env._valid_kick_support().all()
+    if failure == "contact":
+        env.contact_forces[0, env.feet_indices[0], 2] = 0
+    elif failure == "speed":
+        env._rigid_body_lin_vel[0, env.feet_indices[0], 0] = 1
+    else:
+        env._rigid_body_pos[0, env.feet_indices[0], 0] += 0.2
+    assert env._valid_kick_support().tolist() == [False, True]
+    for _ in range(10):
+        env._update_handstand_hold()
+    assert env._best_hold[0] == 0
+    assert env._best_hold[1] >= env.cfg.handstand_curriculum.hold_seconds
+    assert env._reward_kick_clearance()[0] < env._reward_kick_clearance()[1]
+
+
+def test_reference_and_partial_reset(env):
+    env._reset_idx(torch.ones(2, dtype=torch.bool))
+    start = env._standing_posture().clone()
+    assert torch.allclose(start, env.dof_pos, atol=1e-5)
+    env._kick_clock[:] = 0.7
+    crouch = env._standing_posture().clone()
+    assert (crouch[:, 8] < start[:, 8]).all()
+    assert torch.equal(crouch[:, :6], start[:, :6])
+    env._kick_clock[:] = 1.0
+    thrust = env._standing_posture().clone()
+    assert (thrust[:, 8] > crouch[:, 8]).all()
+    assert torch.equal(thrust[:, :6], start[:, :6])
+    env._kick_clock[:] = 0.7 - 1e-5
+    left = env._standing_posture().clone()
+    env._kick_clock[:] = 0.7 + 1e-5
+    assert (left - env._standing_posture()).abs().max() < 1e-4
+    anchor = env._front_anchor[1].clone()
+    env._reset_idx(torch.tensor([True, False]))
+    assert env._kick_clock[0] == 0
+    assert env._kick_clock[1] > 0
+    assert torch.equal(anchor, env._front_anchor[1])
+    assert torch.allclose(env.dof_pos_target[0], torch.zeros(12), atol=2e-7)
+    for _ in range(5):
+        env.step()
+    runner = Go2KickupRunnerCfg()
+    assert torch.isfinite(env.get_states(runner.actor.obs)).all()
+    for name in class_to_dict(runner.critic.reward.weights):
+        reward = getattr(env, "_reward_" + name)()
+        assert reward.shape == (2,)
+        assert torch.isfinite(reward).all()
+
+
+def test_curriculum_batches_failure_and_persistence(env):
+    c = env.cfg.handstand_curriculum
+    c.min_episodes = 2
+    c.required_batches = 2
+    mask = torch.ones(2, dtype=torch.bool)
+
+    def complete(success=True, failed=False):
+        env._best_hold[:] = c.hold_seconds if success else 0
+        env._support_failed[:] = failed
+        env.terminated.zero_()
+        env.timed_out.fill_(True)
+        env._reset_idx(mask)
+
+    complete(failed=True)
+    assert env.curriculum_level == 0
+    complete()
+    assert env.curriculum_level == 0
+    complete()
+    assert env.curriculum_level == 1
+    assert (env._goal("clearance") == 0.012).all()
+    # Manual resets and stale episodes never promote.
+    env.timed_out.zero_()
+    env._best_hold[:] = 1
+    env._reset_idx(mask)
+    assert env._curriculum_episodes == 0
+    saved = env.training_state_dict()
+    env.load_training_state_dict(saved)
+    assert env.curriculum_level == 1
+    assert env._best_hold.max() == 0
+    assert (env.projected_gravity[:, :2].abs() < 1e-3).all()
+
+
+def test_policy_residual_is_bounded_and_slewed(env):
+    env.dof_pos_target.zero_()
+    env.set_state("dof_pos_target", torch.full((2, 12), 100.0))
+    assert env.dof_pos_target.abs().max() <= 0.04
+    for _ in range(30):
+        env.set_state("dof_pos_target", torch.full((2, 12), 100.0))
+    assert env.dof_pos_target[:, :6].abs().max() <= 0.12
+    expected = super(type(env), env)._compute_torques()
+    assert torch.equal(env._compute_torques(), expected)
+
+
+def test_forty_percent_batches_promote_and_final_level_needs_no_balance(env):
+    c = env.cfg.handstand_curriculum
+    c.min_episodes = 10
+    c.required_batches = 2
+    mask = torch.ones(2, dtype=torch.bool)
+    for batch in range(2):
+        for episode in range(5):
+            env._best_hold[:] = c.hold_seconds if episode < 2 else 0
+            env.terminated.zero_()
+            env.timed_out.fill_(True)
+            env._reset_idx(mask)
+        assert env.curriculum_success_rate == pytest.approx(0.4)
+        assert env.curriculum_level == batch
+    env.curriculum_level = 6
+    env._reset_idx(mask)
+    plant(env)
+    env._rigid_body_pos[:, env.feet_indices[2:], 2] = FOOT_RADIUS + 0.17
+    env.handstand_stage.zero_()
+    for _ in range(10):
+        env._update_handstand_hold()
+    assert (env._best_hold >= c.hold_seconds).all()
+
+
+def test_support_failure_latches_and_new_episode_clears_it(env):
+    plant(env)
+    env._rigid_body_pos[0, env.feet_indices[0], 0] += 0.2
+    env._post_decimation_step()
+    assert env._support_failed.tolist() == [True, False]
+    plant(env)
+    # plant clears the failure for fixtures; recreate a previously failed episode.
+    env._support_failed[0] = True
+    assert not env._valid_kick_support()[0]
+    env._reset_idx(torch.tensor([True, False]))
+    assert not env._support_failed.any()

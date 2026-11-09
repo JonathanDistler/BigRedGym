@@ -41,8 +41,8 @@ class KickupCPG:
         self.failed |= active & (self.phase >= 2 * math.pi - 1e-6).all(dim=1)
 
     def targets(self):
-        # First half-cycle crouches all legs. Second half keeps front support
-        # crouched while the hind legs extend rapidly against the ground.
+        # Cosine interpolation keeps endpoint velocities continuous. Front pose
+        # triples should be identical across phases for planted-front kicks.
         p = self.phase
         first = p <= math.pi
         blend = torch.where(first, (1 - p.cos()) / 2, (1 + p.cos()) / 2)
