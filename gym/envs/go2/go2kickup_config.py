@@ -24,15 +24,17 @@ class Go2KickupCfg(Go2HandstandCfg):
     class kick_motion:
         settle_seconds = 0.15
         crouch_seconds = 0.55
-        extend_seconds = 0.30
+        extend_seconds = 0.20
+        velocity_feedforward = True
+        front_gain_fraction = 0.65
         rear_thigh = 1.15
         rear_knee = -2.3
         rear_extend_thigh = 0.30
         rear_extend_knee = -0.85
 
     class kick_curriculum:
-        clearance = [0.005, 0.012, 0.025, 0.045, 0.09, 0.16, 0.24]
-        amplitude = [0.12, 0.20, 0.32, 0.46, 0.62, 0.80, 1.0]
+        clearance = [0.002, 0.003, 0.01, 0.03, 0.06, 0.10, 0.16]
+        amplitude = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.0]
         pitch_degrees = [2.0, 4.0, 7.0, 11.0, 16.0, 23.0, 32.0]
         front_drift = [0.07, 0.06, 0.05, 0.04, 0.035, 0.03, 0.025]
         front_speed = [0.30, 0.25, 0.22, 0.18, 0.15, 0.12, 0.10]
@@ -46,6 +48,8 @@ class Go2KickupCfg(Go2HandstandCfg):
         min_front_load = 0.06
         motion_sigma = 0.5
         lift_window_s = 0.65
+        rear_contact_on_load = 0.03
+        flight_hold_s = 0.04
         rear_contact_load = 0.015  # fraction of total robot weight per foot
         takeoff_clearance = 0.002
         sync_height_sigma = 0.04
@@ -79,8 +83,13 @@ class Go2KickupRunnerCfg(Go2HandstandRunnerCfg):
                 kick_synchronization = 0.6
                 kick_extension_timing = 0.15
                 kick_takeoff_timing = 0.4
-                kick_release = 0.6
-                kick_push_impulse = 0.3
+                kick_takeoff = 4.0
+                kick_flight = 2.0
+                kick_unloading = 0.4
+                kick_pitch_velocity = 0.5
+                kick_velocity_limits = 0.1
+                kick_release = 1.0
+                kick_push_impulse = 1.0
                 kick_force_spikes = 0.3
                 kick_rear_slip = 1.0
                 kick_front_support = 1.0

@@ -22,6 +22,19 @@ class KickupDiagnostics(BalanceDiagnostics):
             "curriculum_success",
             "front_slip_speed_m_s",
             "front_displacement_m",
+            "rear_left_normal_force_N",
+            "rear_right_normal_force_N",
+            "front_contact_retention",
+            "body_pitch_rad",
+            "pitch_velocity_rad_s",
+            "rear_left_vertical_velocity_m_s",
+            "rear_right_vertical_velocity_m_s",
+            "rear_contact_fraction",
+            "flight_seconds",
+            "max_min_rear_clearance_m",
+            "max_front_drift_m",
+            "kick_success",
+            "torque_saturation_fraction",
             "success",
         )
         self.sums = torch.zeros(len(self.names), device=device)
@@ -74,6 +87,12 @@ class Go2Kickup(Go2Handstand):
             for name in positive
         ):
             raise ValueError("kick reward thresholds must be positive and finite")
+        if not s.rear_contact_load < getattr(
+            s, "rear_contact_on_load", 2 * s.rear_contact_load
+        ):
+            raise ValueError("rear contact hysteresis requires on > off")
+        if not 0 < getattr(m, "front_gain_fraction", 1) <= 1:
+            raise ValueError("front gain fraction must lie in (0, 1]")
         if not 0 <= s.rear_static_load < s.max_foot_load:
             raise ValueError("kick static load must be below the force limit")
         if any(not math.isfinite(x) or x <= 0 for x in c.takeoff_tolerance):
@@ -94,7 +113,12 @@ class Go2Kickup(Go2Handstand):
         self._useful_push_impulse = torch.zeros_like(self._takeoff_time)
         self._step_push_impulse = torch.zeros_like(self._takeoff_time)
         self._step_spikes = torch.zeros_like(self._kick_clock)
-        self._physics_offset = 0.0
+        self._rear_contact = torch.zeros_like(self._rear_was_loaded)
+        self._flight_time = torch.zeros_like(self._kick_clock)
+        self._best_flight = torch.zeros_like(self._kick_clock)
+        self._max_clearance = torch.zeros_like(self._kick_clock)
+        self._max_drift = torch.zeros_like(self._kick_clock)
+        self._takeoff_pulse = torch.zeros_like(self._kick_clock)
         self.training_diagnostics = KickupDiagnostics(self.device)
         self.diagnostics_category = "kickup"
 
@@ -132,12 +156,17 @@ class Go2Kickup(Go2Handstand):
         ).clamp(0, 1)[:, None]
 
     def _standing_posture(self):
+        return self._kick_reference(self._kick_clock)[0]
+
+    def _kick_reference(self, clock):
         standing = super()._standing_posture()
         m = self.cfg.kick_motion
-        t = self._kick_clock - m.settle_seconds
+        t = clock - m.settle_seconds
         crouch = (t / m.crouch_seconds).clamp(0, 1)
         extend = ((t - m.crouch_seconds) / m.extend_seconds).clamp(0, 1)
         # Smoothstep gives zero endpoint velocity, including at the phase join.
+        crouch_rate = (6 * crouch * (1 - crouch) / m.crouch_seconds)[:, None]
+        extend_rate = (6 * extend * (1 - extend) / m.extend_seconds)[:, None]
         crouch = (crouch.square() * (3 - 2 * crouch))[:, None]
         extend = (extend.square() * (3 - 2 * extend))[:, None]
         folded = standing.clone()
@@ -147,7 +176,27 @@ class Go2Kickup(Go2Handstand):
         thrust[:, [7, 10]] = m.rear_extend_thigh
         thrust[:, [8, 11]] = m.rear_extend_knee
         reference = standing.lerp(folded, crouch).lerp(thrust, extend)
-        return standing + self._goal("amplitude")[:, None] * (reference - standing)
+        amplitude = self._goal("amplitude")[:, None]
+        velocity = (folded - standing) * crouch_rate * (1 - extend) + (
+            thrust - standing.lerp(folded, crouch)
+        ) * extend_rate
+        return standing + amplitude * (reference - standing), amplitude * velocity
+
+    def _compute_torques(self):
+        # Saved configurations without this opt-in retain their original controller.
+        if not getattr(self.cfg.kick_motion, "velocity_feedforward", False):
+            return super()._compute_torques()
+        ids = self.actuated_dof_indices
+        pos, vel = self.dof_pos[:, ids], self.dof_vel[:, ids]
+        reference, rate = self._kick_reference(self._kick_clock + self._physics_offset)
+        limits = self.dof_pos_limits[ids]
+        target = (reference + self.dof_pos_target).clamp(limits[:, 0], limits[:, 1])
+        rate = rate.clamp(-self.dof_vel_limits[ids], self.dof_vel_limits[ids])
+        gains = torch.ones_like(pos)
+        gains[:, :6] = self.cfg.kick_motion.front_gain_fraction
+        torque = self.p_gains * gains * (target - pos)
+        torque += self.d_gains * (rate + self.dof_vel_target - vel) + self.tau_ff
+        return torque.clamp(-self.actuated_torque_limits, self.actuated_torque_limits)
 
     def set_state(self, name, value):
         if name == "dof_pos_target":
@@ -176,6 +225,12 @@ class Go2Kickup(Go2Handstand):
         self._step_push_impulse[reset_mask] = 0
         self._useful_push_impulse[reset_mask] = 0
         self._step_spikes[reset_mask] = 0
+        self._rear_contact[reset_mask] = False
+        self._flight_time[reset_mask] = 0
+        self._takeoff_pulse[reset_mask] = 0
+        self._best_flight[reset_mask] = 0
+        self._max_clearance[reset_mask] = 0
+        self._max_drift[reset_mask] = 0
 
     def _phase_masks(self, offset=0.0):
         m = self.cfg.kick_motion
@@ -201,6 +256,7 @@ class Go2Kickup(Go2Handstand):
 
     def _pre_decimation_step(self):
         super()._pre_decimation_step()
+        self._takeoff_pulse.zero_()
         self._step_push_impulse.zero_()
         self._step_spikes.zero_()
         self._physics_offset = 0.0
@@ -217,9 +273,16 @@ class Go2Kickup(Go2Handstand):
         push, lift = self._phase_masks(self._physics_offset)
         velocity = self._rigid_body_lin_vel[:, self.feet_indices[2:], 2]
         clearance = self._rear_clearance()
-        self._rear_was_loaded |= loads > s.rear_contact_load
+        was_both = self._synchronized_takeoff()
+        # Schmitt trigger: uncertain force samples retain the previous state.
+        on = getattr(s, "rear_contact_on_load", 2 * s.rear_contact_load)
+        self._rear_contact[:] = torch.where(
+            self._rear_contact, loads > s.rear_contact_load, loads >= on
+        )
+        self._rear_was_loaded |= loads >= on
         airborne = (
-            (loads < s.rear_contact_load)
+            (~self._rear_contact)
+            & (loads < s.rear_contact_load)
             & (clearance > s.takeoff_clearance)
             & (velocity > 0)
         )
@@ -229,6 +292,19 @@ class Go2Kickup(Go2Handstand):
         self._takeoff_time[:] = torch.where(
             first, self._kick_clock[:, None] + self._physics_offset, self._takeoff_time
         )
+        flying = ((~self._rear_contact) & (clearance > s.takeoff_clearance)).all(1)
+        valid = (
+            flying & self._synchronized_takeoff() & self._valid_kick_support() & lift
+        )
+        self._flight_time[:] = torch.where(valid, self._flight_time + h, 0.0)
+        self._best_flight[:] = torch.maximum(self._best_flight, self._flight_time)
+        self._max_clearance[:] = torch.maximum(self._max_clearance, clearance.amin(1))
+        self._max_drift[:] = torch.maximum(
+            self._max_drift, self._front_displacement().amax(1)
+        )
+        self._takeoff_pulse += (
+            ~was_both & self._synchronized_takeoff() & valid
+        ).float()
         # Only the first push counts. Repeated landings cannot farm impulse.
         useful = (
             push[:, None]
@@ -322,6 +398,7 @@ class Go2Kickup(Go2Handstand):
         )
 
     def _update_handstand_hold(self):
+        # Stage zero teaches unloading; all subsequent stages require real flight.
         held = (
             self._valid_kick_support()
             & (self._rear_clearance() >= self._goal("clearance")[:, None]).all(dim=1)
@@ -341,6 +418,18 @@ class Go2Kickup(Go2Handstand):
             ).all(dim=1)
             & self._phase_masks()[1]
             & ~self.terminated
+        )
+        unloading = (
+            self._rear_was_loaded.all(1)
+            & (self._extension_time >= 0).all(1)
+            & (self._handstand_loads()[:, 2:].amax(1) < 0.10)
+            & self._phase_masks()[1]
+            & self._valid_kick_support()
+            & ~self.terminated
+        )
+        held = torch.where(self._reset_level == 0, unloading, held)
+        held &= (self._reset_level < 6) | (
+            (self.projected_gravity[:, 0] > 0.15) & (self.base_ang_vel[:, 1].abs() < 3)
         )
         self._hold_time[:] = torch.where(held, self._hold_time + self.dt, 0.0)
         self._best_hold[:] = torch.maximum(self._best_hold, self._hold_time)
@@ -365,6 +454,7 @@ class Go2Kickup(Go2Handstand):
         )
         return (
             lift.amin(dim=1)
+            * torch.where(self._synchronized_takeoff(), 1.0, 0.2)
             * self._phase_masks()[1]
             * quality
             * self._valid_kick_support()
@@ -445,6 +535,39 @@ class Go2Kickup(Go2Handstand):
             * self._phase_masks()[1]
         )
 
+    def _reward_kick_unloading(self):
+        progress = (1 - self._handstand_loads()[:, 2:].amax(1) / 0.25).clamp(0, 1)
+        return (
+            progress
+            * self._rear_was_loaded.all(1)
+            * self._valid_kick_support()
+            * self._phase_masks()[1]
+        )
+
+    def _reward_kick_takeoff(self):
+        # Event return is independent of control dt (runner integrates rates).
+        return self._takeoff_pulse * self._valid_kick_support() / self.dt
+
+    def _reward_kick_flight(self):
+        return (self._flight_time / self.cfg.reward_settings.flight_hold_s).clamp(
+            0, 1
+        ) * self._valid_kick_support()
+
+    def _reward_kick_pitch_velocity(self):
+        return (
+            (self.base_ang_vel[:, 1] / 1.5).clamp(0, 1)
+            * self._phase_masks()[1]
+            * self._valid_kick_support()
+        )
+
+    def _reward_kick_velocity_limits(self):
+        return (
+            -(self.dof_vel.abs() / self.dof_vel_limits.clamp(min=1e-6) - 0.9)
+            .clamp(min=0)
+            .square()
+            .sum(1)
+        )
+
     def _reward_kick_release(self):
         off = (
             self._handstand_loads()[:, 2:] < self.cfg.reward_settings.rear_contact_load
@@ -507,6 +630,36 @@ class Go2Kickup(Go2Handstand):
                 ),
                 front_slip_speed_m_s=self._front_speed(),
                 front_displacement_m=self._front_displacement(),
+                rear_left_normal_force_N=self.contact_forces[
+                    :, self.feet_indices[2], 2
+                ],
+                rear_right_normal_force_N=self.contact_forces[
+                    :, self.feet_indices[3], 2
+                ],
+                front_contact_retention=(
+                    self._handstand_loads()[:, :2]
+                    >= self.cfg.reward_settings.min_front_load
+                ).all(1),
+                body_pitch_rad=torch.asin(self.projected_gravity[:, 0].clamp(-1, 1)),
+                pitch_velocity_rad_s=self.base_ang_vel[:, 1],
+                rear_left_vertical_velocity_m_s=self._rigid_body_lin_vel[
+                    :, self.feet_indices[2], 2
+                ],
+                rear_right_vertical_velocity_m_s=self._rigid_body_lin_vel[
+                    :, self.feet_indices[3], 2
+                ],
+                rear_contact_fraction=self._rear_contact.float(),
+                flight_seconds=self._flight_time,
+                max_min_rear_clearance_m=self._max_clearance,
+                max_front_drift_m=self._max_drift,
+                kick_success=(
+                    self._best_flight >= self.cfg.handstand_curriculum.hold_seconds
+                )
+                & ~self._support_failed
+                & ~self.terminated,
+                torque_saturation_fraction=(
+                    self.torques.abs() >= 0.99 * self.actuated_torque_limits
+                ).float(),
                 success=self._best_hold >= self.cfg.handstand_curriculum.hold_seconds,
             )
         )

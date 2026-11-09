@@ -1,151 +1,206 @@
-# Go2 standing-start kick-up
+# Go2 rear-leg takeoff
 
-This task learns only the rear-leg kick, with no handstand balance reward,
-checkpoint import, or policy handoff. It retains Go2Handstand inheritance and
-uses its completed-episode curriculum accounting and checkpoint persistence.
-All reset pitches are zero; yaw is randomized. The front feet are anchored at
-their reset world positions after the backend refreshes forward kinematics.
+The task trains a standing-start kick only. Observations and actions retain the
+existing kick-up interface; there is no balancing policy or policy handoff.
+Existing checkpoints and their saved configurations are never modified.
 
-From the repository root in Molab Online (Python 3.11):
+## Diagnosis and changes
+
+The active kick generator is `Go2Kickup._standing_posture`, not the standalone
+legacy `KickupCPG`. It uses a shared rear-leg clock. Previously the stage-zero
+reference amplitude was only 0.12, the push lasted 0.30 s, and the PD velocity
+target was zero even while the position reference moved. Damping consequently
+opposed commanded extension. The final extended pose then remained static.
+The front standing targets used full position stiffness with small residuals.
+These are plausible mechanics bottlenecks, not proof of actuator saturation.
+The saved older reward also tracked front posture and paid clearance outside
+the kick window; its success test did not require contact release or timing.
+The more recent pre-change implementation already had force/clearance event
+checks, but no force hysteresis, explicit takeoff event bonus or flight ramp.
+
+The new reference preserves standing, 0.15 s settling and 0.55 s crouching,
+then extends over configurable `kick_motion.extend_seconds = 0.20` s.
+Smoothstep position interpolation and its analytic velocity give continuous
+position and velocity at phase boundaries. Stage amplitudes now range from
+0.70 to 1.00 so early stages retain a substantial physical push. Maximum nominal
+knee reference velocity at full amplitude is 10.875 rad/s, below the URDF's
+15.70 rad/s limit. Velocity targets are clipped to joint velocity limits;
+position targets are clipped to joint position limits. Existing torque clips
+remain 23.7 Nm hip/thigh and 45.43 Nm calf, with the original PD gains 60/3.
+A new penalty discourages measured speeds above 90% of URDF limits; actual
+simulation velocity is not artificially clamped.
+
+Front position gain is multiplied by configurable `front_gain_fraction = 0.65`;
+damping remains active. Front joints retain independent residual actions.
+Anchors are reward/success conditions, not welds or kinematic constraints.
+Both front contacts, bounded horizontal velocity and displacement are required
+for takeoff rewards. Support loss over 0.08 s or excessive drift disqualifies
+an episode. Existing torso-contact and base-height terminations remain enabled;
+foot unloading itself does not terminate an episode.
+
+Rear contacts use a Schmitt trigger in body-weight units per foot: on at 0.03,
+off below 0.015. A takeoff event requires previous loading, force below the off
+threshold, clearance above 2 mm (world foot centre minus sphere radius), upward
+world foot velocity, and occurrence inside the extension/lift window. Both
+feet must produce events within the stage timing tolerance. Small force alone
+cannot earn takeoff. The event bonus is paid once per episode and divided by
+control dt because PPO integrates reward rates. Flight rewards ramp over 40 ms
+of continuous supported flight and reset on recontact. Minimum-foot clearance
+has only 20% shaping credit until verified coordinated takeoff.
+
+Useful impulse integrates every physics sample: excess load above 0.25 body
+weights per rear foot, clipped at 1.5 body weights, times actual positive knee
+extension rate (capped at 1 rad/s), body weight and physics dt. Only the first
+push window with valid front support earns credit. Per-foot credit saturates
+at body weight times 0.18 s. New impulse is divided by body weight, control dt
+and twice the 0.65 load target; a left/right sharing factor suppresses unilateral
+pushes. Stationary support and repeated landings cannot farm this reward.
+
+## Seven stages
+
+| Stage | Milestone | Reference amplitude | Front drift limit | Timing tolerance |
+| --- | --- | ---: | ---: | ---: |
+| 0 | Both previously loaded rear feet unload below 0.10 body weights each | 0.70 | 7 cm | 120 ms |
+| 1 | Brief genuine flight, both feet above 3 mm | 0.75 | 6 cm | 100 ms |
+| 2 | Both feet above 1 cm | 0.80 | 5 cm | 80 ms |
+| 3 | Both feet above 3 cm | 0.85 | 4 cm | 70 ms |
+| 4 | Both feet above 6 cm | 0.90 | 3.5 cm | 60 ms |
+| 5 | Both feet above 10 cm | 0.95 | 3 cm | 50 ms |
+| 6 | Both feet above 16 cm with nose-down rotation | 1.00 | 2.5 cm | 40 ms |
+
+Stage zero requires 60 ms unloading with valid front support. Every later stage
+requires 60 ms continuous clearance and rear contact release, coordinated
+takeoff and knee-extension onset, and rear height mismatch below 4 cm. Final
+stage additionally requires projected gravity x above 0.15 and absolute pitch
+rate below 3 rad/s. Promotion requires 40% success in two batches of at least
+64 completed primary episodes. Warm starts restart this curriculum at zero.
+
+## Reward weights
+
+| Term | Weight |
+| --- | ---: |
+| clearance | 5.0 |
+| takeoff event | 4.0 |
+| sustained flight | 2.0 |
+| upward velocity, release, push impulse, front support | 1.0 each |
+| synchronization | 0.6 |
+| pitch, positive pitch velocity | 0.5 each |
+| unloading, takeoff timing penalty | 0.4 each |
+| force spikes penalty | 0.3 |
+| extension timing penalty, rear motion tracking | 0.15 each |
+| rear slip penalty | 1.0 |
+| front displacement penalty | 10.0 |
+| front slip penalty (`handstand_slip`) | 4.0 |
+| instability, action rate penalty | 0.05 each |
+| residual motion, velocity limit penalty | 0.1 each |
+| squared torque penalty | 0.000005 |
+| second action difference penalty | 0.005 |
+| joint position limit penalty, collision penalty | 1.0 each |
+| foot contact force penalty | 0.2 |
+| termination penalty | 0.5 |
+
+## Molab commands
+
+From the repository root on `features/kickup`, Python 3.11, CPU MuJoCo:
 
 ```bash
 uv sync --frozen
+# A: actor/critic warm start, NEW optimizers, NEW curriculum, separate run.
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run scripts/train.py \
   --task go2kickup --backend mujoco --device cpu --num_envs 16 \
-  --max_iterations 1500 --save_interval 25 --headless --disable_wandb
+  --max_iterations 1500 --save_interval 25 --seed 7 --headless --disable_wandb \
+  --experiment_name go2kickup_takeoff_finetune \
+  --warm_start logs/go2kickup_sync_grf_1500_20261109_201802/Nov09_20-19-51_/model_1225.pt \
+  --warm_start_task go2kickup
+
+# B: random initialization, independent experiment.
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run scripts/train.py \
+  --task go2kickup --backend mujoco --device cpu --num_envs 16 \
+  --max_iterations 1500 --save_interval 25 --seed 7 --headless --disable_wandb \
+  --experiment_name go2kickup_takeoff_fresh
 ```
 
-For the existing Molab notebook, select `BRANCH = "features/kickup"`,
-`TASK = "go2kickup"`, `DEVICE = "cpu"`, `NUM_ENVS = 16`,
-`EXPERIMENT_NAME = "go2kickup"`, `RESUME = False`, and `USE_WANDB = False`.
-Use `OMP_NUM_THREADS=1` and `MKL_NUM_THREADS=1` in its subprocess environment.
-The notebook's default balance task and 4096 GPU environments are separate presets.
+Replace the warm-start path if using the other 1225 checkpoint. Saved actor and
+critic architecture, observation/action lists, scaling and control settings
+are imported; new kick mechanics, rewards and curriculum are retained. Strict
+state-dict loading rejects incompatible networks. Do not use `--original_cfg`
+for training these experiments: that would restore old rewards. `--resume` is
+for continuing one of the new experiments with its optimizer/curriculum state.
+Both runs collect 512 steps per environment: 8,192 samples per iteration.
+Use identical seeds and evaluate multiple training seeds for a robust comparison.
+The 1500-iteration experiments are intentionally left for Molab; local validation
+runs only one iteration each.
 
-Do not add `--resume`, `--warm_start`, or `--original_cfg` for a fresh run.
-If the notebook host injects a Python path from another Python installation,
-prefix the command with `env -u PYTHONPATH`.
-Weights & Biases is disabled by the kick-up runner configuration, including when
-the CLI flag is omitted; no account is required.
-The standard script writes checkpoints and effective configuration under
-`logs/go2kickup/` and robot diagnostics under `output/`.
+## Physical evaluation
 
-`algorithm.rollout_size = 8192` yields 512 policy steps per environment at 16
-environments. `algorithm.batch_size = 1024` controls optimizer minibatches,
-independently of the rollout size. Checkpoints are saved every 25 iterations
-and at the end of training. OMP/MKL thread limits avoid CPU oversubscription.
+```bash
+# Reproduce a baseline with its saved task code and config (trusted local run).
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run scripts/evaluate_kickup.py \
+  --checkpoint logs/go2kickup_sync_grf_1500_20261109_201802/Nov09_20-19-51_/model_1225.pt \
+  --saved-config --episodes 16 --output-dir output/kickup_baseline
+# Evaluate with current mechanics/rewards: omit --saved-config.
+```
 
-| Level | Both rear feet clearance (cm) | Reference amplitude | Desired pitch (degrees) | Front drift (cm) | Front speed (m/s) |
-| --- | --- | --- | --- | --- | --- |
-| 0 | 0.5 | 0.12 | 2 | 7 | 0.30 |
-| 1 | 1.2 | 0.20 | 4 | 6 | 0.25 |
-| 2 | 2.5 | 0.32 | 7 | 5 | 0.22 |
-| 3 | 4.5 | 0.46 | 11 | 4 | 0.18 |
-| 4 | 9 | 0.62 | 16 | 3.5 | 0.15 |
-| 5 | 16 | 0.80 | 23 | 3 | 0.12 |
-| 6 | 24 | 1.00 | 32 | 2.5 | 0.10 |
-
-Each episode lasts up to four seconds. The reference settles for 0.15 seconds,
-crouches the rear joints for 0.55 seconds and extends them over 0.30 seconds.
-Smoothstep interpolation preserves reference position and endpoint velocity.
-The inherited PD controller adds bounded, slew-limited policy residuals to
-this absolute reference. Front references remain standing; their small policy
-residuals allow stabilizing corrections. Reference timing is independent of the
-training script's randomized timeout counters.
-
-Success requires both rear feet to exceed the level target for 0.06 continuous
-seconds during the 0.70–1.65 s kick window, with both front feet loaded, slow
-and within their anchor tolerance. Both rear contacts must release. Rear takeoff
-and extension onset differences must be within the level's tolerance (120, 100,
-80, 70, 60, 50, 40 ms); rear height mismatch must be at most 4 cm. Extension
-onset means actual knee extension speed exceeds 0.2 rad/s during push-off.
-Takeoff requires prior loading, less than 1.5% body weight of rear-foot load,
-at least 2 mm world clearance, and positive world vertical foot velocity.
-A fall, excessive accumulated drift, or more than 0.08 continuous seconds of
-front support loss/sliding disqualifies that episode. Front movement and contact
-also shape dense rewards before success. Clearance uses world foot-centre z
-minus the URDF sphere radius above the backend's z=0 plane, never knee angles
-or the front feet's height. Non-plane terrain is explicitly unsupported.
-
-Promotion requires at least 40% success in two consecutive batches of at least
-64 completed episodes at the current level. These are on-policy episode outcome
-batches, not a separate deterministic evaluation process. Manual resets and
-older-level episodes in flight do not count. Final-level success still measures
-kick clearance and front support; it never requires vertical balance.
-Torso contact and collapsed base-height termination remain enabled.
-
-The objective uses these phases: settle (0–0.15 s), crouch (0.15–0.70 s),
-push-off (0.70–1.00 s), and lift/kick (0.70–1.65 s). Lift shaping overlaps
-push-off so early successful releases receive credit. The rear reference has
-one shared clock; it does not constrain the two policy residuals to be equal.
-The legacy `KickupCPG` also explicitly shares its rear oscillator phase.
-
-Reward weights live in `Go2KickupRunnerCfg.critic.reward.weights`; thresholds
-and normalization parameters live in `Go2KickupCfg.reward_settings`.
-All rates are multiplied by the control time step by the existing PPO runner.
-
-| Term | Weight | Definition |
-| --- | ---: | --- |
-| `kick_clearance` | 5.0 | Minimum world rear-foot clearance / stage target, capped at one; gated by front support and drift/speed quality during lift/kick. |
-| `kick_upward_velocity` | 1.0 | Positive minimum world rear-foot vertical velocity / 0.6 m/s, capped at one during lift/kick. Folding on the floor earns zero. |
-| `kick_synchronization` | 0.6 | Smooth Gaussian height and vertical-velocity agreement (4 cm and 0.4 m/s scales), multiplied by minimum clearance progress. |
-| `kick_extension_timing` | 0.15 | Negative squared rear knee extension-rate mismatch (2 rad/s scale) plus onset timing mismatch, capped at four during push-off. Joint angles may differ. |
-| `kick_takeoff_timing` | 0.4 | Negative squared takeoff delay / stage tolerance, capped at four. A missing second takeoff accumulates delay. |
-| `kick_release` | 0.6 | Supported minimum-clearance reward when both rear feet are unloaded and takeoffs are synchronized. |
-| `kick_push_impulse` | 0.3 | Bounded, balanced, useful rear impulse rate during push-off, described below. |
-| `kick_force_spikes` | 0.3 | Negative physics-step mean squared excess foot load above 1.5 body weights, covering front/rear feet and all phases. |
-| `kick_rear_slip` | 1.0 | Negative squared rear horizontal foot speed while loaded. |
-| `kick_front_support` | 1.0 | Minimum front load / 0.06 body weights, capped at one; both feet must support. |
-| `kick_front_displacement` | 10.0 | Negative summed squared front world anchor displacement. |
-| `handstand_slip` | 4.0 | Existing negative front horizontal slip speed squared while loaded. |
-| `kick_motion` | 0.15 | Rear reference tracking during crouch/push-off; front joints remain free to stabilize. |
-| `kick_pitch` | 0.5 | Existing supported progressive nose-down pitch shaping. |
-
-Existing torque, action-rate, joint-limit, impact/contact, collision, and angular
-instability penalties remain active. Positive lift rewards require valid front
-support, speed and drift, so jumping with all four feet cannot earn them.
-
-MuJoCo's `rnePostConstraint` world-frame external foot forces are already exposed
-by the CPU backend. Every physics substep integrates positive vertical rear-foot
-force times physics dt to log per-foot push impulse in N s. Force credit is
-restricted to the extension window, valid front support, and before each foot's
-first takeoff; rear force in flight and subsequent landings earns zero.
-For reward, subtract 0.25 body weights per foot (static support), cap loads at
-1.5 body weights, and multiply by positive actual knee extension speed / 1 rad/s
-(capped at one). Thus stationary support earns no push reward. Each foot's
-credited impulse saturates at `mass * gravity * 0.18 s` per episode. Divide the
-new credited impulse by `mass * gravity * control_dt * 2 * 0.65`, cap at one,
-and multiply by `2 * min(left, right) / (left + right)`. The runner's dt factor
-then yields a dimensionless impulse return; timestep, mass and gravity changes
-do not create an arbitrary force-reward scale. Force has a deliberately smaller
-weight than clearance, support, velocity and synchronization.
-
-Local rollout diagnostics include separate rear-left/right clearance and
-push impulse, minimum rear clearance, extension/takeoff timing differences,
-both-takeoff fraction, front drift/slip, episode success and completed-batch
-curriculum success. Timing differences are zero before either event and accrue
-while the second event is missing; read them with `both_takeoff_fraction`.
-
-Validation:
+The evaluator performs repeated four-second deterministic episodes at stage
+zero by default (`--level 0` through `--level 6`) with 16 CPU environments and checks every reward for finiteness. It saves
+checkpoint SHA256, per-episode simultaneous takeoff, sustained supported flight,
+maximum minimum clearance, maximum front drift, contact retention and impulse.
+`success_percentage` requires at least 60 ms synchronized supported flight at the stage clearance target and
+survival; `curriculum_success` is separate, since stage-zero unloading is not
+kick-up success. CSV contains per-foot forces, contacts, heights, vertical
+velocities, body pitch/rate, joint speeds, applied torques and saturation ratios.
+Impulse in the independent evaluator uses control-step sampling; the task's
+logged impulse integrates physics substeps. Training `kickup/*` vitals include
+force, contact, flight, clearance/drift maxima, rotation, saturation and success.
+These training vitals are sample averages, not independent episode success rates.
 
 ```bash
 uv run python -m pytest tests/unit_tests/test_go2_kickup.py tests/unit_tests/test_kickup_cpg.py -q
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run scripts/train.py \
-  --task go2kickup --backend mujoco --device cpu --num_envs 16 \
-  --max_iterations 1 --headless --disable_wandb --experiment_name go2kickup_smoke
 ```
 
-A smoke test establishes initialization and PPO execution, not trained kick
-reliability. Inspect clearance, front drift/slip, and curriculum success over a
-full training run before evaluating a controller. The separate legacy
-`KickupCPG` helper remains available, but this task uses its existing inherited
-PD reference hook rather than the helper's handoff interface.
+Smoke tests demonstrate numerical stability and checkpoint compatibility. They
+do not establish a trained policy's takeoff reliability or handoff readiness.
 
-Implementation validation (2026-11-09): 69 tests passed across kick-up, CPG,
-handstand/curriculum, CPU MuJoCo physics/reset, contact diagnostics and task
-registration. Ruff and `git diff --check` passed. A fresh CPU PPO iteration
-completed with 16 environments and 8,192 samples, saving `model_0.pt`,
-`model_1.pt` and the requested `kickup/*` vitals under
-`logs/go2kickup_sync_final_smoke/Nov09_15-11-46_/`. W&B was disabled by config
-without the CLI flag. Value loss was 0.0153 and surrogate loss was 0.00502;
-no curriculum successes were recorded in this untrained smoke run. Molab's
-hosted runtime was not directly exercised.
+## Local validation, 2026-11-09
+
+50 tests passed across kick-up, CPG, handstand curriculum, CPU physics/reset and
+contact diagnostics. Fresh and actor/critic warm-start PPO smoke runs completed
+one iteration each with 16 CPU environments and 8192 samples, W&B disabled.
+Both optimizers and curriculum state were fresh. All measured rewards/losses
+were finite. These are smoke runs, not completed 1500-iteration experiments.
+
+Two distinct local checkpoints have iteration 1225. The newer sync/GRF run
+(SHA256 `5b4876a3d0fb0c1dd30470da3ad4ea8384ad38499f89077cd35b0ef168711b63`)
+reproduced the planted-feet failure with its saved implementation/config:
+0/16 coordinated takeoffs, no sustained flight, per-episode maximum minimum
+clearance 1.39–1.74 mm. Front contact retention averaged 99.1%; maximum front
+drift ranged 3.63–4.96 cm. During 0.70–1.00 s, rear calf torque utilization peaked
+at 26.2% left and 36.3% right, far below clipping. Mean rear knee speeds were
++0.52 and -0.017 rad/s. Mean rear forces were 51.1 and 66.6 N; pitch speed was
+between -0.274 and +0.274 rad/s. This supports insufficient/coordinated extension
+and angular momentum, rather than torque saturation, as the immediate failure.
+See `output/kickup_baseline_sync/` for raw CSV and per-episode results.
+
+The older `logs/go2kickup/Nov09_15-08-38_/model_1225.pt` has different saved task
+code and behavior; its historical curriculum success is not a physical takeoff
+metric. Always identify the run as well as the iteration. The commands above
+select the newer checkpoint that reproduced the reported failure.
+
+Evaluating that same newer policy with current mechanics produced coordinated
+rear event pairs in 15/16 episodes and maximum minimum clearance up to 8.36 mm,
+but **0/16 physically supported successes**: mean maximum front drift increased
+to 8.05 cm and contact retention fell to 94.4%. The evaluator correctly rejects
+rear release accompanied by invalid front support. These measurements do not
+show that the trained objective has been achieved. Fine-tuning must learn to
+retain front anchoring under the stronger push; compare this with fresh training.
+Current-mechanics results are in `output/kickup_sync_modified/`. Local smoke
+checkpoints live under `logs/go2kickup_takeoff_fresh_smoke/`,
+`logs/go2kickup_takeoff_finetune_smoke/` (older checkpoint), and
+`logs/go2kickup_takeoff_sync_finetune_smoke/` (newer checkpoint).
+
+Changed source files: `gym/envs/go2/go2kickup.py` (controller, contacts, rewards,
+curriculum gates and diagnostics), `gym/envs/go2/go2kickup_config.py` (parameters
+and weights), `gym/utils/robot_metrics.py` (CSV telemetry),
+`scripts/evaluate_kickup.py` (independent evaluation),
+`tests/unit_tests/test_go2_kickup.py` (physical event and controller tests), and
+this document. Pre-existing README edits and output artifacts were preserved.

@@ -33,6 +33,7 @@ def plant(env):
     env.terminated.zero_()
     env._support_failed.zero_()
     env._kick_clock[:] = 1.0
+    env._reset_level[:] = 1
     env._takeoff_time[:] = 0.95
     env._extension_time[:] = 0.75
 
@@ -121,7 +122,7 @@ def test_curriculum_batches_failure_and_persistence(env):
     assert env.curriculum_level == 0
     complete()
     assert env.curriculum_level == 1
-    assert (env._goal("clearance") == 0.012).all()
+    assert (env._goal("clearance") == 0.003).all()
     # Manual resets and stale episodes never promote.
     env.timed_out.zero_()
     env._best_hold[:] = 1
@@ -141,8 +142,7 @@ def test_policy_residual_is_bounded_and_slewed(env):
     for _ in range(30):
         env.set_state("dof_pos_target", torch.full((2, 12), 100.0))
     assert env.dof_pos_target[:, :6].abs().max() <= 0.12
-    expected = super(type(env), env)._compute_torques()
-    assert torch.equal(env._compute_torques(), expected)
+    assert (env._compute_torques().abs() <= env.actuated_torque_limits).all()
 
 
 def test_forty_percent_batches_promote_and_final_level_needs_no_balance(env):
@@ -162,6 +162,8 @@ def test_forty_percent_batches_promote_and_final_level_needs_no_balance(env):
     env._reset_idx(mask)
     plant(env)
     env._rigid_body_pos[:, env.feet_indices[2:], 2] = FOOT_RADIUS + 0.25
+    env._reset_level[:] = 6
+    env.projected_gravity[:, 0] = 0.3
     env.handstand_stage.zero_()
     for _ in range(10):
         env._update_handstand_hold()
@@ -317,10 +319,10 @@ def test_extension_onset_and_support_gate(env):
     env._post_physics_step()
     assert (env._extension_time[:, 0] >= 0).all()
     assert (env._extension_time[:, 1] < 0).all()
-    env._kick_clock[:] = 0.9
+    env._kick_clock[:] = 0.89
     env.dof_vel[:, 11] = 1
     env._post_physics_step()
-    assert (env._event_difference(env._extension_time) > 0.09).all()
+    assert (env._event_difference(env._extension_time) > 0.08).all()
     assert (env._reward_kick_extension_timing() < 0).all()
     plant(env)
     env.contact_forces[:, env.feet_indices[0], 2] = 0
@@ -329,3 +331,58 @@ def test_extension_onset_and_support_gate(env):
     assert env._reward_kick_clearance().max() == 0
     assert env._reward_kick_upward_velocity().max() == 0
     assert env._reward_kick_synchronization().max() == 0
+
+
+def test_hysteresis_and_true_takeoff_event(env):
+    weight = prepare_push(env)
+    env._post_physics_step()
+    rear = env.feet_indices[2:]
+    env.contact_forces[:, rear, 2] = weight[:, None] * 0.02
+    env._post_physics_step()
+    assert env._rear_contact.all()  # between on and off: retain contact
+    env.contact_forces[:, rear, 2] = 0
+    env._post_physics_step()
+    assert not env._rear_contact.any()
+    assert env._reward_kick_takeoff().max() == 0  # unloaded but on floor
+    env._rigid_body_pos[:, rear, 2] = FOOT_RADIUS + 0.012
+    env._rigid_body_lin_vel[:, rear, 2] = 0.4
+    env._post_physics_step()
+    assert (env._reward_kick_takeoff() * env.dt == 1).all()
+    env._pre_decimation_step()
+    env._post_physics_step()
+    assert env._reward_kick_takeoff().max() == 0  # cannot farm event
+    for _ in range(25):
+        env._post_physics_step()
+    assert (env._reward_kick_flight() == 1).all()
+    env.contact_forces[:, rear[0], 2] = weight * 0.04
+    env._post_physics_step()
+    assert env._reward_kick_flight().max() == 0
+
+
+def test_reference_velocity_matches_derivative_and_limits(env):
+    t = torch.full((2,), 0.8)
+    pose, velocity = env._kick_reference(t)
+    numerical = (
+        env._kick_reference(t + 1e-4)[0] - env._kick_reference(t - 1e-4)[0]
+    ) / 2e-4
+    assert torch.allclose(velocity, numerical, atol=0.003)
+    assert velocity.abs().max() < env.dof_vel_limits.min()
+    assert torch.equal(pose[:, 6:9], pose[:, 9:12])
+    env._kick_clock[:] = 0.8
+    assert (env._compute_torques().abs() <= env.actuated_torque_limits).all()
+
+
+def test_stage_zero_unloading_does_not_unlock_liftoff_stage(env):
+    plant(env)
+    env._takeoff_time[:] = -1
+    env._rear_was_loaded[:] = True
+    env._reset_level[:] = 0
+    for _ in range(10):
+        env._update_handstand_hold()
+    assert (env._best_hold > 0).all()
+    env._hold_time.zero_()
+    env._best_hold.zero_()
+    env._reset_level[:] = 1
+    for _ in range(10):
+        env._update_handstand_hold()
+    assert env._best_hold.max() == 0
