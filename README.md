@@ -388,3 +388,28 @@ still require a training run.
 
 For longer-hold training, CPG checkpoint transfer, 60-second survival diagnostics,
 and rear-leg recovery training, see [TRAINING_RECOVERY.md](TRAINING_RECOVERY.md).
+
+### Kick-up training
+
+`go2kickup` trains a residual around a front-leg crouch and rear-leg
+crouch/extension reference. Seven reset levels (90, 80, 65, 50, 35, 15, 0
+pitch degrees) move from top-pose holds to standing starts. Promotion uses
+completed primary episodes; replay episodes cannot promote a level, and a fall
+cancels an earlier successful hold. Success requires both rear feet clear and
+both front feet supporting the body within slip and displacement limits.
+
+```bash
+uv run --frozen scripts/train.py --task=go2kickup --device=cpu --num_envs=16 --headless
+```
+
+TensorBoard/W&B records curriculum success and `kickup` rear-foot height,
+clearance, front slip speed, displacement, and held success. Motion timings,
+postures, reward weights, and success thresholds are in `go2kickup_config.py`;
+these defaults require simulation training and evaluation before hardware use.
+
+For later composition with `cpg_front`, the motor target is an absolute kick-up
+reference plus the policy's position residual; contact CPG outputs remain
+contact clocks. The front feet have stance modes configured, with CPG disabled
+by default. This does not merge branch policies: a handoff still needs matched
+observation/action scaling and a validated transition into the balance policy.
+The kick-up actor includes a normalized motion-time observation.

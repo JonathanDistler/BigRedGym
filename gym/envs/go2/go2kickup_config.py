@@ -1,45 +1,61 @@
-"""Initial simulation tuning; preserve balance policy observation/action sizes."""
+"""Kick-up residual policy; seven success-gated stages end at standing starts."""
 
-from gym.envs.go2.go2balance_config import Go2BalanceCfg, Go2BalanceRunnerCfg
-
-
-class Go2KickupCfg(Go2BalanceCfg):
-    class kickup:
-        duration_s = 0.65
-        standing = [[0.0, 0.58, -1.16]] * 4
-        crouched = [[0.0, 1.05, -2.1]] * 4
-        extended = [[0.0, 1.05, -2.1]] * 2 + [[0.0, 0.25, -0.5]] * 2
-        handoff_pitch_rad = 1.15
-        handoff_max_pitch_rad = 1.75
-        handoff_max_speed = 4.0
-
-    class kickup_curriculum:
-        enabled = True
-        initial_level = 0
-        # Intermediate goals are kicks, not balance-policy handoffs.
-        pitch_degrees = [15.0, 30.0, 45.0, 60.0, 75.0]
-        amplitudes = [0.35, 0.5, 0.7, 0.85, 1.0]
-        min_episodes = 128
-        success_fraction = 0.7
-        required_batches = 2
-        final_hold_s = 0.5
-        residual_limit_rad = 0.15
-
-    class balance_failure(Go2BalanceCfg.balance_failure):
-        contact_grace_seconds = 0.7
-
-    class handstand_curriculum(Go2BalanceCfg.handstand_curriculum):
-        enabled = False
-
-    class balance_perturbations(Go2BalanceCfg.balance_perturbations):
-        enabled = False
+from gym.envs.go2.go2handstand_config import Go2HandstandCfg, Go2HandstandRunnerCfg
 
 
-class Go2KickupRunnerCfg(Go2BalanceRunnerCfg):
-    class critic(Go2BalanceRunnerCfg.critic):
-        class reward(Go2BalanceRunnerCfg.critic.reward):
-            class weights(Go2BalanceRunnerCfg.critic.reward.weights):
-                kickup_progress = 2.0
+class Go2KickupCfg(Go2HandstandCfg):
+    class handstand_curriculum(Go2HandstandCfg.handstand_curriculum):
+        pitch_degrees = [90.0, 80.0, 65.0, 50.0, 35.0, 15.0, 0.0]
+        tilt_noise_degrees = [0.0, 1.0, 2.0, 3.0, 3.0, 4.0, 0.0]
+        angular_velocity_noise = [0.0, 0.02, 0.03, 0.04, 0.05, 0.05, 0.0]
+        hold_seconds = 1.0
 
-    class runner(Go2BalanceRunnerCfg.runner):
+    class kick_motion:
+        crouch_seconds = 0.35
+        extend_seconds = 0.25
+        front_thigh = 1.1
+        front_knee = -2.2
+        rear_thigh = 1.25
+        rear_knee = -2.5
+        rear_extend_thigh = 0.5
+        rear_extend_knee = -1.0
+
+    class reward_settings(Go2HandstandCfg.reward_settings):
+        valid_front_speed = 0.10
+        max_front_displacement = 0.10
+        min_rear_clearance = 0.12
+        motion_sigma = 0.5
+
+    class contact_cpg(Go2HandstandCfg.contact_cpg):
+        # Contact timing can be enabled when composing with the front CPG policy.
+        modes = ["stance", "stance", "ignore", "ignore"]
+
+
+class Go2KickupRunnerCfg(Go2HandstandRunnerCfg):
+    class actor(Go2HandstandRunnerCfg.actor):
+        obs = Go2HandstandRunnerCfg.actor.obs + ["kick_motion_obs"]
+
+    class critic(Go2HandstandRunnerCfg.critic):
+        obs = Go2HandstandRunnerCfg.critic.obs + ["kick_motion_obs"]
+
+        class reward:
+            class weights:
+                handstand_lean = 1.0
+                kick_motion = 0.5
+                handstand_kick = 3.0
+                kick_clearance = 2.0
+                handstand_balance = 10.0
+                handstand_slip = 10.0
+                kick_front_displacement = 10.0
+                torques = 5e-6
+                action_rate = 0.1
+                action_rate2 = 0.01
+                dof_pos_limits = 1.0
+                feet_contact_forces = 0.2
+                collision = 1.0
+
+            class termination_weight:
+                termination = 5.0
+
+    class runner(Go2HandstandRunnerCfg.runner):
         experiment_name = "go2kickup"

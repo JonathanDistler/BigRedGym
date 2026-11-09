@@ -231,7 +231,10 @@ class OnPolicyRunner(BaseRunner):
 
         diagnostics = getattr(self.env, "training_diagnostics", None)
         if diagnostics is not None:
-            logger.register_category("balance", diagnostics, list(diagnostics.names))
+            logger.register_category(
+                getattr(self.env, "diagnostics_category", "balance"),
+                diagnostics, list(diagnostics.names),
+            )
 
         logger.attach_torch_obj_to_wandb((self.alg.actor, self.alg.critic))
 
