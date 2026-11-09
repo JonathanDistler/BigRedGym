@@ -43,3 +43,13 @@ def test_amplitude_scales_each_environment():
         oscillator.targets()[0], standing + 0.25 * (crouched - standing)
     )
     assert torch.allclose(oscillator.targets()[1], crouched)
+
+
+def test_rear_oscillators_share_phase_even_after_perturbation():
+    oscillator = KickupCPG(2, "cpu", config())
+    oscillator.phase[:, 2] = 1.0
+    oscillator.phase[:, 3] = 2.0
+    targets = oscillator.targets().reshape(2, 4, 3)
+    assert torch.equal(targets[:, 2], targets[:, 3])
+    oscillator.advance(0.01, torch.zeros(2, dtype=torch.bool))
+    assert torch.equal(oscillator.phase[:, 2], oscillator.phase[:, 3])

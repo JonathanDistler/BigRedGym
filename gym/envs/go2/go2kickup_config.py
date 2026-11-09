@@ -31,11 +31,12 @@ class Go2KickupCfg(Go2HandstandCfg):
         rear_extend_knee = -0.85
 
     class kick_curriculum:
-        clearance = [0.005, 0.012, 0.025, 0.045, 0.07, 0.11, 0.16]
+        clearance = [0.005, 0.012, 0.025, 0.045, 0.09, 0.16, 0.24]
         amplitude = [0.12, 0.20, 0.32, 0.46, 0.62, 0.80, 1.0]
         pitch_degrees = [2.0, 4.0, 7.0, 11.0, 16.0, 23.0, 32.0]
         front_drift = [0.07, 0.06, 0.05, 0.04, 0.035, 0.03, 0.025]
         front_speed = [0.30, 0.25, 0.22, 0.18, 0.15, 0.12, 0.10]
+        takeoff_tolerance = [0.12, 0.10, 0.08, 0.07, 0.06, 0.05, 0.04]
         support_grace_s = 0.08
 
     class scaling(Go2HandstandCfg.scaling):
@@ -44,6 +45,19 @@ class Go2KickupCfg(Go2HandstandCfg):
     class reward_settings(Go2HandstandCfg.reward_settings):
         min_front_load = 0.06
         motion_sigma = 0.5
+        lift_window_s = 0.65
+        rear_contact_load = 0.015  # fraction of total robot weight per foot
+        takeoff_clearance = 0.002
+        sync_height_sigma = 0.04
+        sync_velocity_sigma = 0.4
+        extension_velocity_sigma = 2.0
+        upward_velocity_target = 0.6
+        rear_static_load = 0.25
+        extension_onset_rate = 0.2
+        extension_rate_target = 1.0
+        push_load_target = 0.65  # each rear foot, in body weights
+        max_foot_load = 1.5
+        impulse_target = 0.18  # J / (mass * gravity), seconds per rear foot
 
 
 class Go2KickupRunnerCfg(Go2HandstandRunnerCfg):
@@ -60,8 +74,16 @@ class Go2KickupRunnerCfg(Go2HandstandRunnerCfg):
 
         class reward:
             class weights:
-                kick_clearance = 4.0
-                kick_front_support = 0.5
+                kick_clearance = 5.0
+                kick_upward_velocity = 1.0
+                kick_synchronization = 0.6
+                kick_extension_timing = 0.15
+                kick_takeoff_timing = 0.4
+                kick_release = 0.6
+                kick_push_impulse = 0.3
+                kick_force_spikes = 0.3
+                kick_rear_slip = 1.0
+                kick_front_support = 1.0
                 kick_pitch = 0.5
                 kick_motion = 0.15
                 handstand_slip = 4.0
@@ -88,3 +110,4 @@ class Go2KickupRunnerCfg(Go2HandstandRunnerCfg):
         experiment_name = "go2kickup"
         save_interval = 25
         resume = False
+        disable_wandb = True

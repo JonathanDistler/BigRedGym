@@ -37,13 +37,17 @@ class KickupCPG:
         self.handed_off |= in_region & ~self.failed
         active = ~(self.handed_off | self.failed)
         self.phase[active] += 2 * math.pi * dt / self.cfg.duration_s
+        # A shared rear oscillator prevents phase drift; policy residuals may
+        # still make independent stabilizing corrections.
+        self.phase[:, 3] = self.phase[:, 2]
         self.phase.clamp_(max=2 * math.pi)
         self.failed |= active & (self.phase >= 2 * math.pi - 1e-6).all(dim=1)
 
     def targets(self):
         # Cosine interpolation keeps endpoint velocities continuous. Front pose
         # triples should be identical across phases for planted-front kicks.
-        p = self.phase
+        p = self.phase.clone()
+        p[:, 3] = p[:, 2]
         first = p <= math.pi
         blend = torch.where(first, (1 - p.cos()) / 2, (1 + p.cos()) / 2)
         start = torch.where(first[..., None], self.poses[0], self.poses[1])

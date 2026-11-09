@@ -197,6 +197,9 @@ def setup(args=None, env_cfg=None, train_cfg=None):
 
     set_seed(env_cfg.seed)
 
+    if getattr(train_cfg.runner, "disable_wandb", False):
+        args.disable_wandb = True
+
     # wandb
     wandb_helper = wandb_singleton.WandbSingleton()
     wandb_helper.setup_wandb(env_cfg=env_cfg, train_cfg=train_cfg, args=args)
