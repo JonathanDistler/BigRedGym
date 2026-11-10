@@ -41,3 +41,28 @@ def test_play_updates_inference_buffers_outside_callers_inference_mode():
 
     assert env.steps == 11
     assert not torch.is_inference_mode_enabled()
+
+
+def test_kickup_playback_repeats_completed_episodes():
+    class KickTask:
+        max_episode_length = 1
+        repeat_kickup_episodes = True
+        _episode_active = torch.ones(1, dtype=torch.bool)
+
+        def step(self):
+            pass
+
+        def check_exit(self):
+            pass
+
+    resets = []
+    runner = SimpleNamespace(
+        actor_cfg={"actions": [], "disable_actions": False},
+        get_inference_actions=lambda: torch.zeros(1, 0),
+        set_actions=lambda *args: None,
+        reset_envs=lambda: resets.append(True),
+    )
+    env = KickTask()
+    play(env, runner)
+    assert len(resets) == 10
+    assert not env._episode_active.any()

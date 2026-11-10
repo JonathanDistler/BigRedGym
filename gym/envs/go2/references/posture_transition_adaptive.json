@@ -1,0 +1,22 @@
+{
+  "takeover_s": 1.1265797538073217,
+  "front_hip": 0.352692297,
+  "front_knee": -2.0802952421,
+  "front_gain": 0.9,
+  "front_damping": 0.73349801206,
+  "rear_hip": 1.02129456199,
+  "rear_knee": -1.5986139901,
+  "tuck_delay": 0.0,
+  "tuck_duration": 0.12,
+  "switch_s": 1.1265797538073217,
+  "blend_s": 0.18022822130056015,
+  "hip_delay": -0.1317054813,
+  "pitch_gain": -0.009932114382786406,
+  "pitch_rate_gain": 0.17363574541578575,
+  "front_hip_delta": 0.10243890601246441,
+  "front_knee_delta": -0.03696217931544021,
+  "rear_hip_delta": -0.18357065997857253,
+  "rear_knee_delta": -0.11454284872071085,
+  "reference_s": 0.3724639579275566,
+  "com_gain": -1.0361053855899351
+}
