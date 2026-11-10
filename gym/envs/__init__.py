@@ -9,6 +9,7 @@ from gym.utils.task_registry import task_registry
 # * 3. register the task experiment name to the env/config/ppo classes
 
 class_dict = {
+    "Go2FrontYield": ".go2.go2frontyield",
     "LeggedRobot": ".base.legged_robot",
     "FixedRobot": ".base.fixed_robot",
     "Cartpole": ".cartpole.cartpole",
@@ -28,6 +29,7 @@ class_dict = {
 }
 
 config_dict = {
+    "Go2FrontYieldCfg": ".go2.go2frontyield_config",
     "CartpoleCfg": ".cartpole.cartpole_config",
     "MiniCheetahCfg": ".mini_cheetah.mini_cheetah_config",
     "MiniCheetahRefCfg": ".mini_cheetah.mini_cheetah_ref_config",
@@ -49,6 +51,7 @@ config_dict = {
 }
 
 runner_config_dict = {
+    "Go2FrontYieldRunnerCfg": ".go2.go2frontyield_config",
     "CartpoleRunnerCfg": ".cartpole.cartpole_config",
     "MiniCheetahRunnerCfg": ".mini_cheetah.mini_cheetah_config",
     "MiniCheetahRefRunnerCfg": ".mini_cheetah.mini_cheetah_ref_config",
@@ -70,6 +73,7 @@ runner_config_dict = {
 }
 
 task_dict = {
+    "go2frontyield": ["Go2FrontYield", "Go2FrontYieldCfg", "Go2FrontYieldRunnerCfg"],
     "cartpole": ["Cartpole", "CartpoleCfg", "CartpoleRunnerCfg"],
     "mini_cheetah": ["MiniCheetah", "MiniCheetahCfg", "MiniCheetahRunnerCfg"],
     "mini_cheetah_ref": [

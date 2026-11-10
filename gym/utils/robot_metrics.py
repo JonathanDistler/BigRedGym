@@ -119,6 +119,30 @@ class RobotMetrics:
             for j, name in enumerate(e.dof_names):
                 row[f"{name}_angle_rad"] = float(joints[i, j])
                 row[f"{name}_velocity_rad_s"] = float(joint_vel[i, j])
+            if hasattr(e, "_rear_clearance"):
+                for j, label in enumerate(("RL", "RR")):
+                    row[f"{label}_clearance_m"] = float(e._rear_clearance()[i, j])
+                    row[f"{label}_vertical_velocity_m_s"] = float(
+                        e._rigid_body_lin_vel[i, e.feet_indices[j + 2], 2]
+                    )
+                if hasattr(e, "_push_impulse"):
+                    for j, label in enumerate(("RL", "RR")):
+                        row[f"{label}_push_impulse_Ns"] = float(e._push_impulse[i, j])
+                        if hasattr(e, "_rear_contact"):
+                            row[f"{label}_contact_hysteresis"] = int(
+                                e._rear_contact[i, j]
+                            )
+                    if hasattr(e, "_flight_time"):
+                        row["both_rear_flight_s"] = float(e._flight_time[i])
+                    row["front_max_drift_m"] = float(e._front_displacement()[i].max())
+            torque_limits = getattr(e, "actuated_torque_limits", e.torque_limits)
+            for j in range(e.torques.shape[1]):
+                row[f"actuator_{j}_torque_Nm"] = float(e.torques[i, j])
+                row[f"actuator_{j}_saturation"] = float(
+                    e.torques[i, j].abs() / torque_limits[i, j]
+                    if torque_limits.ndim == 2
+                    else e.torques[i, j].abs() / torque_limits[j]
+                )
             if self.writer is None:
                 self.writer = csv.DictWriter(self.file, fieldnames=list(row))
                 self.writer.writeheader()

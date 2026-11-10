@@ -145,6 +145,37 @@ def setup(args=None, env_cfg=None, train_cfg=None):
         saved_env, saved_train = checkpoint_configs(
             args.warm_start, args.warm_start_task
         )
+        if args.task == "go2frontyield":
+            # Reject accidental interface changes rather than silently adapting
+            # this opt-in reference to a different checkpoint's motor interface.
+            for role in ("actor", "critic"):
+                before = class_to_dict(getattr(saved_train, role))
+                after = class_to_dict(getattr(train_cfg, role))
+                for key in (
+                    "obs",
+                    "actions",
+                    "normalize_obs",
+                    "hidden_dims",
+                    "activation",
+                    "smooth_exploration",
+                    "frequency",
+                    "disable_actions",
+                ):
+                    if before.get(key) != after.get(key):
+                        raise ValueError(f"Warm-start {role}.{key} is incompatible")
+            for name in ("scaling", "control"):
+                before = class_to_dict(getattr(saved_env, name))
+                after = class_to_dict(getattr(env_cfg, name))
+                # Saved effective configs contain these derived fields; setup
+                # recomputes them below from the checked frequency settings.
+                if name == "control":
+                    for key in ("ctrl_dt", "decimation"):
+                        before.pop(key, None)
+                        after.pop(key, None)
+                if before != after:
+                    raise ValueError(
+                        f"Warm-start {name} is incompatible with reference parity"
+                    )
         # Keep the new task's rewards and curriculum, but preserve the learned
         # observation/action interface, network architecture and motor settings.
         for name in ("contact_cpg", "scaling", "control"):

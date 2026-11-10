@@ -1,5 +1,11 @@
 # Go2 rear-leg takeoff
 
+The [reference-only optimization](go2kickup_reference.md) now demonstrates
+16/16 supported 30 mm takeoffs with less than 4 cm front drift. Use its opt-in
+reference playback and validation commands. The historical long PPO commands
+below remain deferred. A separate [bounded-residual pilot](go2frontyield_pilot.md)
+integrates this reference into the opt-in `go2frontyield` task.
+
 The task trains a standing-start kick only. Observations and actions retain the
 existing kick-up interface; there is no balancing policy or policy handoff.
 Existing checkpoints and their saved configurations are never modified.

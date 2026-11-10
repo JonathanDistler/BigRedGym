@@ -51,10 +51,16 @@ def get_play_args(argv=None):
         default=-1,
         help="Model iteration index (default: latest)",
     )
-    parser.add_argument(
+    config_source = parser.add_mutually_exclusive_group()
+    config_source.add_argument(
         "--original_cfg",
         action="store_true",
         help="Load environment and runner configs saved with the selected run.",
+    )
+    config_source.add_argument(
+        "--current_cfg",
+        action="store_true",
+        help="Explicitly use local configs (kick-up defaults to the saved run).",
     )
     parser.add_argument(
         "--handstand_reset",
@@ -98,9 +104,13 @@ def setup(args):
     # Register tasks (imports the task classes).
     import gym.envs  # noqa: F401
 
+    original_cfg = args.original_cfg or (
+        args.task in ("go2kickup", "go2frontyield")
+        and not getattr(args, "current_cfg", False)
+    )
     env_cfg, train_cfg = task_registry.get_cfgs(
         args.task,
-        original_cfg=args.original_cfg,
+        original_cfg=original_cfg,
         experiment_name=args.experiment_name,
         load_run=args.load_run,
     )
@@ -109,7 +119,8 @@ def setup(args):
 
     # Play-time overrides — small batch, long episodes, no pushes.
     env_cfg.env.num_envs = args.num_envs
-    env_cfg.env.episode_length_s = max(50, getattr(args, "seconds", 0) + 1)
+    if args.task not in ("go2kickup", "go2frontyield"):
+        env_cfg.env.episode_length_s = max(50, getattr(args, "seconds", 0) + 1)
     if getattr(args, "survival", False) and hasattr(env_cfg, "balance_perturbations"):
         env_cfg.balance_perturbations.enabled = getattr(args, "eval_pushes", False)
     if hasattr(env_cfg, "commands"):
@@ -120,6 +131,9 @@ def setup(args):
         assisted = (
             getattr(env_cfg, "balance_only", False)
             or args.handstand_reset == "curriculum"
+            # Kick-up curriculum poses are standing starts. Sampling them also
+            # restores the saved reference amplitude and goal observation.
+            or args.task in ("go2kickup", "go2frontyield")
         )
         env_cfg.handstand_curriculum.enabled = assisted
         env_cfg.init_state.reset_mode = (
@@ -157,7 +171,8 @@ def setup(args):
     print(f"Playback checkpoint: {checkpoint_path}\nSHA256: {digest}")
     if checkpoint_path.stem == "model_0":
         print("WARNING: model_0 is the initial policy, before any training updates.")
-    if not args.original_cfg:
+    print(f"Playback configuration: {'saved run' if original_cfg else 'current local'}")
+    if not original_cfg:
         print(
             "Using current local configs. Use --original_cfg with the complete "
             "downloaded run to reproduce its training configuration."
@@ -177,6 +192,7 @@ def setup(args):
 
     runner = task_registry.make_alg_runner(env, train_cfg)
     env.evaluation_checkpoint = str(checkpoint_path.resolve())
+    env.repeat_kickup_episodes = args.task in ("go2kickup", "go2frontyield")
     runner.switch_to_eval()
     attach_robot_metrics(env, args)
     return env, runner
@@ -217,6 +233,10 @@ def play(env, runner):
                 actual_height.append(actual_height_val)
                 delta_height.append(desired_height_val - actual_height_val)
             env.check_exit()
+            if getattr(env, "repeat_kickup_episodes", False):
+                # Repetition must not promote the checkpoint's saved stage.
+                env._episode_active.zero_()
+                runner.reset_envs()
     finally:
         metrics = getattr(env, "robot_metrics", None)
         if metrics is not None:
