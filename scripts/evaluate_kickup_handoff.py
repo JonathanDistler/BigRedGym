@@ -62,7 +62,7 @@ class Policy:
         cfg.env.episode_length_s = 12
         cfg.seed = 7
         cfg.push_robots.toggle = False
-        if task == "go2balance":
+        if task in ("go2balance", "go2kickup_recovery"):
             cfg.balance_perturbations.enabled = False
         train.runner.device = "cpu"
         train.runner.resume = False
@@ -73,7 +73,12 @@ class Policy:
         with _saved_env_imports(original_cfg_source_dir(self.path.parent)):
             module = importlib.import_module(f"gym.envs.go2.{task}")
             task_class = getattr(
-                module, "Go2Balance" if task == "go2balance" else "Go2FrontYield"
+                module,
+                {
+                    "go2balance": "Go2Balance",
+                    "go2frontyield": "Go2FrontYield",
+                    "go2kickup_recovery": "Go2KickupRecovery",
+                }[task],
             )
         self.env = task_class(
             cfg=cfg,
@@ -194,7 +199,26 @@ def measurements(e):
             if hasattr(e, "_front_anchor")
             else 0.0,
         )
+        for axis, value in zip("wxyz", d.xquat[base]):
+            row[f"body_quaternion_{axis}"] = float(value)
+        for axis, value in zip("xyz", d.cvel[base, :3]):
+            row[f"body_angular_velocity_{axis}"] = float(value)
+        for axis, value, velocity, momentum in zip(
+            "xyz", com, d.subtree_linvel[base], d.subtree_angmom[base]
+        ):
+            row[f"com_world_{axis}"] = float(value)
+            row[f"com_velocity_{axis}"] = float(velocity)
+            row[f"centroidal_angular_momentum_{axis}"] = float(momentum)
+            row[f"centroidal_linear_momentum_{axis}"] = float(
+                velocity * m.body_subtreemass[base]
+            )
         for j in range(4):
+            foot_velocity = np.zeros(6)
+            mujoco.mj_objectVelocity(
+                m, d, mujoco.mjtObj.mjOBJ_BODY, int(feet[j]), foot_velocity, 0
+            )
+            for axis, value in zip("xyz", foot_velocity[3:]):
+                row[f"foot_velocity_{axis}_{j}"] = float(value)
             row[f"foot_x_{j}"] = float(d.xpos[feet[j], 0])
             row[f"foot_y_{j}"] = float(d.xpos[feet[j], 1])
             row[f"force_{j}"] = float(max(force[j, 2], 0))

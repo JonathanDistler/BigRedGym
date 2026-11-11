@@ -141,7 +141,14 @@ class Evaluator:
         self.source = KickReference(**json.loads(Path(REFERENCE).read_text()))
 
     def evaluate(
-        self, parameters, data, indices, trace_path=None, viewer=False, view_slot=0
+        self,
+        parameters,
+        data,
+        indices,
+        trace_path=None,
+        viewer=False,
+        view_slot=0,
+        state_callback=None,
     ):
         p = parameters
         e = self.balance.env
@@ -156,6 +163,7 @@ class Evaluator:
         support_steps = np.zeros(n)
         active_steps = np.zeros(n)
         longest = np.zeros(n)
+        stable_duration = np.zeros(n)
         hold = np.zeros(n)
         torque_sat = np.zeros(n)
         speed_ratio = np.zeros(n)
@@ -360,6 +368,7 @@ class Evaluator:
                         and min(r["clearance_2"], r["clearance_3"]) >= 0.2
                         and not failed[j]
                     )
+                    stable_duration[j] += e.dt if valid else 0.0
                     hold[j] = hold[j] + e.dt if valid else 0.0
                     longest[j] = max(longest[j], hold[j])
                     if completed_at[j] is None and hold[j] >= 5 - 1e-6:
@@ -378,6 +387,8 @@ class Evaluator:
                             r[f"policy_target_{joint}"] = float(policy_target[j, joint])
                             r[f"torque_{joint}"] = float(e.torques[j, joint])
                         recorded.append(r)
+                if state_callback is not None:
+                    state_callback(e, current_t, handoff_time, failed.copy())
                 if render:
                     render(e._backend._datas[view_slot].qpos)
                 if failed.all():
@@ -395,6 +406,7 @@ class Evaluator:
                     completed_at[j] is not None and collisions[j]
                 ),
                 hold_s=float(longest[j]),
+                total_stable_duration_s=float(stable_duration[j]),
                 collision=bool(collisions[j]),
                 first_contact_relative_s=first_contact[j],
                 max_pitch_deg=float(np.rad2deg(maximum_pitch[j])),

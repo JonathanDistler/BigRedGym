@@ -9,6 +9,7 @@ from gym.utils.task_registry import task_registry
 # * 3. register the task experiment name to the env/config/ppo classes
 
 class_dict = {
+    "Go2KickupRecovery": ".go2.go2kickup_recovery",
     "Go2FrontYield": ".go2.go2frontyield",
     "LeggedRobot": ".base.legged_robot",
     "FixedRobot": ".base.fixed_robot",
@@ -23,12 +24,12 @@ class_dict = {
     "Go2Kickup": ".go2.go2kickup",
     "Go2Handstand": ".go2.go2handstand",
     "Go2Reachability": ".go2.go2reachability",
-    "Go2Kickup": ".go2.go2kickup",
     "Go2Balance": ".go2.go2balance",
     "Go2Trot": ".go2.go2trot",
 }
 
 config_dict = {
+    "Go2KickupRecoveryCfg": ".go2.go2kickup_recovery_config",
     "Go2FrontYieldCfg": ".go2.go2frontyield_config",
     "CartpoleCfg": ".cartpole.cartpole_config",
     "MiniCheetahCfg": ".mini_cheetah.mini_cheetah_config",
@@ -45,12 +46,12 @@ config_dict = {
     "Go2KickupCfg": ".go2.go2kickup_config",
     "Go2HandstandCfg": ".go2.go2handstand_config",
     "Go2ReachabilityCfg": ".go2.go2reachability_config",
-    "Go2KickupCfg": ".go2.go2kickup_config",
     "Go2BalanceCfg": ".go2.go2balance_config",
     "Go2TrotCfg": ".go2.go2trot_config",
 }
 
 runner_config_dict = {
+    "Go2KickupRecoveryRunnerCfg": ".go2.go2kickup_recovery_config",
     "Go2FrontYieldRunnerCfg": ".go2.go2frontyield_config",
     "CartpoleRunnerCfg": ".cartpole.cartpole_config",
     "MiniCheetahRunnerCfg": ".mini_cheetah.mini_cheetah_config",
@@ -67,12 +68,14 @@ runner_config_dict = {
     "Go2KickupRunnerCfg": ".go2.go2kickup_config",
     "Go2HandstandRunnerCfg": ".go2.go2handstand_config",
     "Go2ReachabilityRunnerCfg": ".go2.go2reachability_config",
-    "Go2KickupRunnerCfg": ".go2.go2kickup_config",
     "Go2BalanceRunnerCfg": ".go2.go2balance_config",
     "Go2TrotRunnerCfg": ".go2.go2trot_config",
 }
 
 task_dict = {
+    "go2kickup_recovery": [
+        "Go2KickupRecovery", "Go2KickupRecoveryCfg", "Go2KickupRecoveryRunnerCfg"
+    ],
     "go2frontyield": ["Go2FrontYield", "Go2FrontYieldCfg", "Go2FrontYieldRunnerCfg"],
     "cartpole": ["Cartpole", "CartpoleCfg", "CartpoleRunnerCfg"],
     "mini_cheetah": ["MiniCheetah", "MiniCheetahCfg", "MiniCheetahRunnerCfg"],
@@ -108,8 +111,9 @@ task_dict = {
     "go2": ["Go2", "Go2Cfg", "Go2RunnerCfg"],
     "go2kickup": ["Go2Kickup", "Go2KickupCfg", "Go2KickupRunnerCfg"],
     "go2handstand": ["Go2Handstand", "Go2HandstandCfg", "Go2HandstandRunnerCfg"],
-    "go2reachability": ["Go2Reachability", "Go2ReachabilityCfg", "Go2ReachabilityRunnerCfg"],
-    "go2kickup": ["Go2Kickup", "Go2KickupCfg", "Go2KickupRunnerCfg"],
+    "go2reachability": [
+        "Go2Reachability", "Go2ReachabilityCfg", "Go2ReachabilityRunnerCfg"
+    ],
     "go2balance": ["Go2Balance", "Go2BalanceCfg", "Go2BalanceRunnerCfg"],
     "go2trot": ["Go2Trot", "Go2TrotCfg", "Go2TrotRunnerCfg"],
 }
