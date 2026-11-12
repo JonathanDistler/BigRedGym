@@ -1,0 +1,8 @@
+{
+  "name": "physical_80_85_90_95_100_v1_prepared",
+  "scales": [0.80, 0.85, 0.90, 0.95, 1.00],
+  "inherits": "protocol_90.json",
+  "progress_pitch_degrees": [10, 12, 15, 45],
+  "recovery_required": [false, false, false, true],
+  "status": "Prepared separate ablation; do not pool with the 90%-start comparison. Run after its completed diagnostic or documented stall."
+}

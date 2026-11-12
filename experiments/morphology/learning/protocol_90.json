@@ -1,0 +1,33 @@
+{
+  "name": "physical_90_95_100_v1",
+  "scales": [0.90, 0.95, 1.00],
+  "training_seeds": [42, 43],
+  "evaluation_seeds": [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007],
+  "num_envs": 8,
+  "steps_per_iteration": 1024,
+  "diagnostic_iterations": 24,
+  "continuation_base_steps": 196608,
+  "hard_cap_steps": 270336,
+  "min_full_scale_steps": 65536,
+  "evaluation_interval": 4,
+  "stage_window_episodes": 32,
+  "stage_passing_windows": 2,
+  "stage_required_fraction": 0.30,
+  "progress_pitch_degrees": [15, 45],
+  "recovery_required": [false, true],
+  "minimum_stage_steps": 4096,
+  "ppo": {
+    "gamma": 0.995, "gae_lambda": 0.95, "epochs": 4,
+    "batch_size": 256, "learning_rate": 0.0001,
+    "clip": 0.2, "target_kl": 0.02, "entropy_weight": 0.005,
+    "value_weight": 0.5, "max_grad_norm": 1.0,
+    "hidden_dims": [256, 256, 128], "initial_log_std": -0.7
+  },
+  "continuation_gate": {
+    "evaluation": "deterministic same-stage held-out seeds; compare final two diagnostic evaluations to iteration zero",
+    "condition": "supported takeoff rate improves >=0.10 OR (mean supported peak pitch improves >=0.05236 rad AND mean rear clearance improves >=0.005m), with front-support fraction >=0.5 and finite optimization",
+    "scope": "curriculum must show intermediate learning; reward/survival alone cannot pass",
+    "if_failed": "stop both methods at equal diagnostic interaction budgets; preserve stalled curriculum; do not skip stages"
+  },
+  "full_scale_reservation": "If B reaches full scale, give both methods max(base_steps, full_scale_entry_step+min_full_scale_steps), up to hard_cap. If it never reaches full scale, record a stalled/incomplete curriculum."
+}

@@ -1,0 +1,144 @@
+{
+  "name": "pendulum_guided_rotation_pilot_v1",
+  "status": "separate six-update pilot; no extended launch",
+  "scales": [
+    0.9,
+    0.95,
+    1.0
+  ],
+  "training_seeds": [
+    42,
+    43
+  ],
+  "evaluation_seeds": [
+    62000,
+    62001,
+    62002,
+    62003,
+    62004,
+    62005,
+    62006,
+    62007
+  ],
+  "num_envs": 8,
+  "steps_per_iteration": 1024,
+  "base_training_steps": 10240,
+  "hard_cap_steps": 1318912,
+  "min_full_scale_steps": 262144,
+  "evaluation_interval": 2,
+  "stage_window_episodes": 32,
+  "stage_passing_windows": 2,
+  "stage_required_fraction": 0.3,
+  "minimum_stage_steps": 8192,
+  "progress_pitch_degrees": [
+    20,
+    35
+  ],
+  "progress_airborne_seconds": [
+    0.02,
+    0.04
+  ],
+  "environment": {
+    "action_scale": 2.0,
+    "target_filter": 1.0,
+    "terminate_on_goal": false,
+    "goal_pitch_degrees": 35.0,
+    "goal_airborne_seconds": 0.04,
+    "rotation_enabled": true,
+    "pendulum_velocity_guidance": true
+  },
+  "ppo": {
+    "gamma": 0.995,
+    "gae_lambda": 0.95,
+    "epochs": 4,
+    "batch_size": 256,
+    "learning_rate": 1e-05,
+    "clip": 0.2,
+    "target_kl": 0.01,
+    "entropy_weight": 0.005,
+    "value_weight": 0.5,
+    "max_grad_norm": 1.0,
+    "hidden_dims": [
+      256,
+      256,
+      128
+    ],
+    "initial_log_std": -4.605170185988091,
+    "log_std_min": -6.0
+  },
+  "initialization": "Identical shared morphology-adapted BC actor in both arms, identical seeded critic and Adam. Same combined offline demo anchor in both arms. Std=.01, floor=-6; original .05-noise initialization was not robust.",
+  "constraints": "No CPG reference, no controller handoff, no posture curriculum, native geometry/collisions/torque/velocity limits unchanged; only the shared command interface changes from v1.",
+  "budget_definition": "Training transitions equal within each A/B seed pair. Evaluation interactions and offline BC updates are logged separately. No skipped morphology stages.",
+  "endpoint": "Takeoff-phase goal is genuine push-off plus 35-degree supported airborne rotation. It is not a complete handstand.",
+  "final_evaluation_seeds": [
+    20000,
+    20001,
+    20002,
+    20003,
+    20004,
+    20005,
+    20006,
+    20007,
+    20008,
+    20009,
+    20010,
+    20011,
+    20012,
+    20013,
+    20014,
+    20015,
+    20016,
+    20017,
+    20018,
+    20019,
+    20020,
+    20021,
+    20022,
+    20023,
+    20024,
+    20025,
+    20026,
+    20027,
+    20028,
+    20029,
+    20030,
+    20031
+  ],
+  "final_evaluation_note": "Fresh matched test resets, separate from development/authority/BC seeds. Saved separately from periodic development curves.",
+  "calibration_note": "Frozen-actor calibration selected common latent std=.05 to retain front support while allowing exploration; learning rate=1e-5 and soft target KL=.01 use a conservative update scale for the narrower distribution. Earlier smoke/calibration outputs are preserved.",
+  "full_scale_reservation": "Both arms receive the same extension, up to base + 262144 full-scale transitions + 8192 old-episode/rounding margin. No forced stage promotion.",
+  "retention_evaluation_seeds": [
+    58000,
+    58001,
+    58002,
+    58003,
+    58004,
+    58005,
+    58006,
+    58007
+  ],
+  "bc_regularization": {
+    "dataset": "output/multimorph_bc_20261111_v2/bc_dataset.npz",
+    "dataset_sha256": "3749a0cc66f3d2dd3b087fc6436332aa215041ca3eb7e3ca8a285817df4a711e",
+    "validation_seed_start": 51012,
+    "initial_weight": 10.0,
+    "final_weight": 2.0,
+    "decay_updates": 20,
+    "latent_scale": 0.05,
+    "batch_size": 128
+  },
+  "rotation_experiment": {
+    "source_update": 30,
+    "updates": 6,
+    "anchor_conditions": [
+      "global",
+      "phase"
+    ],
+    "phase_labels": "",
+    "phase_decay_updates": 4,
+    "phase_floor": 0.1,
+    "phase_time_constant": 0.1,
+    "heldout_evaluation": "62000\u201362007, not used for training, diagnosis, or search",
+    "curriculum": "Retain certified 20/35-degree gates; no forced promotion or retroactive relaxation."
+  }
+}

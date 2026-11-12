@@ -112,6 +112,17 @@ The automated regression suite runs with `uv run --frozen python -m pytest -q`.
 See [limitations and validation scope](genAI_skills/README_MUJOCO.md#limitations-and-validation-scope)
 for what the retained tests cover.
 
+If a ROS or Conda shell exports `PYTHONPATH`, it can make this Python 3.11
+environment import incompatible Python 3.12 packages. Run tests with that
+variable removed:
+
+```sh
+env -u PYTHONPATH .venv/bin/python -m pytest tests/unit_tests/test_go2_kickup.py -q
+```
+
+Alternatively, run `unset PYTHONPATH` in the current terminal before using
+the project's virtualenv. Activating a virtualenv alone does not clear it.
+
 ## Moving a Molab policy to local playback
 
 Molab trains the GitHub checkout selected by `REPO_URL` and `BRANCH`, not
@@ -390,6 +401,12 @@ For longer-hold training, CPG checkpoint transfer, 60-second survival diagnostic
 and rear-leg recovery training, see [TRAINING_RECOVERY.md](TRAINING_RECOVERY.md).
 
 ### Kick-up training
+
+For the CPG recovery frontier dataset, performance-gated curriculum and
+50-update diagnostic, see [the recovery frontier report](docs/go2kickup_recovery_frontier.md).
+The separate [frozen-balance residual experiment](docs/go2kickup_frozen_residual.md)
+preserves the original actor and CPG, verifies exact zero-correction parity, and
+limits diagnostic training to 25 updates with frequent retention checks.
 
 `go2kickup` trains a residual around a front-leg crouch and rear-leg
 crouch/extension reference. Seven reset levels (90, 80, 65, 50, 35, 15, 0

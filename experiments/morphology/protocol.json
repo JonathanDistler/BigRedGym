@@ -1,0 +1,27 @@
+{
+  "status": "preregistered extended experiment; not executed",
+  "methods": {
+    "A": "fixed 1.00",
+    "B": "fixed 0.85, evaluated at 1.00",
+    "C": "performance curriculum; shortest independently validated feasible scale",
+    "D": "same start scale as C; fixed-iteration curriculum"
+  },
+  "training_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  "evaluation_seeds": {"first": 1000, "last_inclusive": 1999},
+  "iterations": 1000,
+  "steps_per_iteration": 2048,
+  "actual_control_steps_per_run": 2048000,
+  "physics_steps_per_run": 10240000,
+  "evaluation_interval": 25,
+  "fixed_curriculum_interval": "floor(iterations / number_of_stages); reserves final-stage training",
+  "performance_curriculum": {
+    "threshold": "five-second handstand success >= 0.70",
+    "episodes_per_nonoverlapping_window": 32,
+    "consecutive_passing_windows": 2,
+    "application": "next episode reset only"
+  },
+  "primary_endpoint": "full-scale standing-start five-second success, averaged within training seed",
+  "secondary_endpoints": ["episode seconds", "recovery after 0.3 rad/s pitch velocity increment at 2 seconds", "pitch progression", "front/rear contacts", "torque saturation", "KL", "clip fraction", "gradient norm"],
+  "statistics": "Report seed-level mean, std and paired differences. Ten training seeds; do not treat evaluation episodes as independent training runs.",
+  "required_before_extended_training": "Independent improved-feasibility validation and adequate full-scale fine-tuning budget; pilot alone is not sufficient."
+}
