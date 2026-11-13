@@ -1,0 +1,19 @@
+{
+  "experiment": "com_energy_phase_v1",
+  "parent": "059ac39",
+  "geometry": 1.0,
+  "arms": {
+    "A": "BC-initialized takeoff PPO baseline",
+    "B": "COM energy and full orientation rewards",
+    "C": "B plus event-conditioned phase and phase-weighted BC",
+    "D": "C plus 40 ms reward EMA and 20 ms action filtering"
+  },
+  "training_seeds": [42, 43],
+  "evaluation_seeds": [91000, 91001],
+  "diagnostic_updates": 2,
+  "transitions_per_update": 128,
+  "curriculum_window_episodes": 16,
+  "curriculum_required_fraction": 0.75,
+  "morphology_comparison": "deferred; retain existing physical 90/95/100 models",
+  "extended_training": false
+}

@@ -1,0 +1,20 @@
+{
+  "experiment": "phase_conditioned_angular_momentum_v1",
+  "branch": "experiment/com_energy_phase_ppo",
+  "geometry": 1.0,
+  "initialization": "Existing certified BC-phase checkpoint C_seed42/checkpoint_000.pt; identical across A/B/C and zero-padded estimate inputs",
+  "architecture": {"actor_inputs": 61, "critic_inputs": 91, "hidden": [256,256,128], "actions": 12},
+  "conditions": {
+    "A": "Existing energy/orientation objective with common new event phase and state estimates",
+    "B": "Bounded momentum profile, measured ground impulse, swing-floor energy progress, reduced later BC plus safe candidate prefixes",
+    "C": "B plus terminal energy/orientation/low angular velocity, COM support reward and archived offline balance labels"
+  },
+  "training_seeds": [42,43],
+  "evaluation_seeds": [94000,94001],
+  "updates": 2,
+  "transitions_per_update": 256,
+  "default_action_filter": false,
+  "ablation_tau_seconds": {"push":0.0,"swing":0.005,"balance":0.04},
+  "extended_training": false,
+  "calibration": "Six frozen teacher rollouts; seven bounded post-takeoff modifications including filter versus unchanged control, two resets each; one half-timestep integration check"
+}

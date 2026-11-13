@@ -1,0 +1,17 @@
+{
+  "suite": "anticipatory_v1",
+  "conditions": {"A": "original_fixed_support", "B": "early_reposition", "C": "early_reposition_rear_sweep"},
+  "preparation": "output/front_catch_preparation_20261112_v3",
+  "output": "output/front_catch_anticipatory_molab_v1",
+  "num_envs": 16,
+  "workers": 4,
+  "updates": 10,
+  "horizon": 32,
+  "seeds": [42, 43],
+  "eval_every": 2,
+  "checkpoint_every": 2,
+  "max_seconds": 1200,
+  "match_environment_budgets": true,
+  "reference_num_envs": 16,
+  "reference_horizon": 32
+}

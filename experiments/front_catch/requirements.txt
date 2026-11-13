@@ -1,0 +1,9 @@
+mujoco==3.11.0
+numpy>=2
+pandas>=2.2
+matplotlib>=3.8
+pytest>=8
+tensordict
+wandb
+# Keep an existing working PyTorch installation. If absent, install CPU PyTorch
+# from https://download.pytorch.org/whl/cpu before running the notebook.
