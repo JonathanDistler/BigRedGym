@@ -1,0 +1,228 @@
+[
+  {
+    "label": "validated_train_0",
+    "split": "train",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.175999999999542,
+    "termination": "timeout"
+  },
+  {
+    "label": "validated_train_1",
+    "split": "train",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.175999999999542,
+    "termination": "timeout"
+  },
+  {
+    "label": "held_original",
+    "split": "evaluation",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.175999999999542,
+    "termination": "timeout",
+    "reused_verified_result": true
+  },
+  {
+    "label": "pitch_rate_plus",
+    "split": "evaluation",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.175999999999542,
+    "termination": "timeout",
+    "reused_verified_result": true
+  },
+  {
+    "label": "pitch_rate_minus",
+    "split": "evaluation",
+    "initial_valid": true,
+    "success": false,
+    "hold": 3.691999999999815,
+    "termination": "self_collision",
+    "reused_verified_result": true
+  },
+  {
+    "label": "pitch_offset",
+    "split": "evaluation",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.179999999999541,
+    "termination": "timeout",
+    "reused_verified_result": true
+  },
+  {
+    "label": "proposal_0",
+    "split": "evaluation",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.197999999999539,
+    "termination": "timeout",
+    "pitch": 90,
+    "omega": 0,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_1",
+    "split": "train",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.179999999999541,
+    "termination": "timeout",
+    "pitch": 89,
+    "omega": 0.15,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_2",
+    "split": "train",
+    "initial_valid": true,
+    "success": false,
+    "hold": 0.0,
+    "termination": "self_collision",
+    "pitch": 88,
+    "omega": -0.2,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_3",
+    "split": "evaluation",
+    "initial_valid": true,
+    "success": false,
+    "hold": 0.0,
+    "termination": "self_collision",
+    "pitch": 85,
+    "omega": 0.4,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_4",
+    "split": "train",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.003999999999561,
+    "termination": "timeout",
+    "pitch": 80,
+    "omega": 0.6,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_5",
+    "split": "train",
+    "initial_valid": true,
+    "success": false,
+    "hold": 0.0,
+    "termination": "self_collision",
+    "pitch": 75,
+    "omega": 0.8,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_6",
+    "split": "evaluation",
+    "initial_valid": true,
+    "success": false,
+    "hold": 0.0,
+    "termination": "self_collision",
+    "pitch": 70,
+    "omega": 1,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_7",
+    "split": "train",
+    "initial_valid": true,
+    "success": false,
+    "hold": 0.0,
+    "termination": "self_collision",
+    "pitch": 60,
+    "omega": 1.2,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_8",
+    "split": "train",
+    "initial_valid": true,
+    "success": true,
+    "hold": 6.197999999999539,
+    "termination": "timeout",
+    "pitch": 89,
+    "omega": -0.35,
+    "com_shift": 0.004,
+    "front_delta": 0,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_9",
+    "split": "evaluation",
+    "initial_valid": false,
+    "details": {
+      "ik_error": 0.0007779241845142388,
+      "rear_clearance": 0.7345472049251609,
+      "joint_violation": 0.0,
+      "speed_ratio": 1.162716943838982,
+      "torque_ratio": 0.0,
+      "bodies": "",
+      "self_contacts": 0
+    },
+    "pitch": 89,
+    "omega": -0.35,
+    "com_shift": -0.004,
+    "front_delta": 0.01,
+    "rear_delta": 0
+  },
+  {
+    "label": "proposal_10",
+    "split": "train",
+    "initial_valid": true,
+    "success": false,
+    "hold": 0.0,
+    "termination": "self_collision",
+    "pitch": 88,
+    "omega": 0.3,
+    "com_shift": 0,
+    "front_delta": -0.01,
+    "rear_delta": 0.01
+  },
+  {
+    "label": "proposal_11",
+    "split": "train",
+    "initial_valid": true,
+    "success": false,
+    "hold": 0.0,
+    "termination": "self_collision",
+    "pitch": 85,
+    "omega": 0.5,
+    "com_shift": 0,
+    "front_delta": 0,
+    "rear_delta": -0.02
+  },
+  {
+    "label": "adc_95010",
+    "split": "train",
+    "certified_takeoff": true,
+    "frames": 160
+  },
+  {
+    "label": "adc_95011",
+    "split": "train",
+    "certified_takeoff": true,
+    "frames": 160
+  }
+]
