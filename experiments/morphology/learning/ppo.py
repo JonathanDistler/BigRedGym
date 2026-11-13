@@ -100,20 +100,27 @@ def update(net, optimizer, batch, hp, demonstrations=None):
                 demo_ids = torch.randint(len(demo_obs), (hp.get("bc_batch_size", 128),))
                 # Fixed normalization keeps the anchor independent of learned std.
                 demo_latent = torch.atanh(demo_actions[demo_ids].clamp(-0.999, 0.999))
-                frame_loss = (
-                    (
-                        (net.actor(demo_obs[demo_ids]) - demo_latent)
-                        / hp.get("bc_latent_scale", 0.05)
-                    )
-                    .square()
-                    .mean(-1)
-                )
+                joint_loss = (
+                    (net.actor(demo_obs[demo_ids]) - demo_latent)
+                    / hp.get("bc_latent_scale", 0.05)
+                ).square()
+                frame_loss = joint_loss.mean(-1)
+                bc_unweighted = frame_loss.mean()
                 weights = torch.ones_like(frame_loss)
                 if len(demonstrations) == 3:
                     phase = float(hp.get("bc_phase_fraction", 0.0))
-                    weights = 1 - phase * (1 - demonstrations[2][demo_ids])
-                bc_unweighted = frame_loss.mean()
-                demo_weight = weights.mean()
+                    demo_weights = demonstrations[2][demo_ids]
+                    if demo_weights.ndim == 2:
+                        frame_loss = (
+                            joint_loss * (1 - phase * (1 - demo_weights))
+                        ).mean(-1)
+                    else:
+                        weights = 1 - phase * (1 - demo_weights)
+                demo_weight = (
+                    demo_weights.mean()
+                    if len(demonstrations) == 3 and demo_weights.ndim == 2
+                    else weights.mean()
+                )
                 bc_loss = (frame_loss * weights).mean()
             loss = (
                 policy

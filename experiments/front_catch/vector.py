@@ -103,11 +103,17 @@ class Lane:
     def state(self):
         return dict(
             environment=self.env.state(),
+            gains=dict(
+                kp=copy.deepcopy(self.env.cfg.kp), kd=copy.deepcopy(self.env.cfg.kd)
+            ),
             episode=self.episode,
             rng=copy.deepcopy(self.rng.bit_generator.state),
         )
 
     def restore(self, state):
+        if "gains" in state:
+            self.env.cfg.kp = state["gains"]["kp"]
+            self.env.cfg.kd = np.asarray(state["gains"]["kd"])
         self.env.restore(state["environment"])
         self.episode = state["episode"]
         self.rng.bit_generator.state = state["rng"]
@@ -162,6 +168,10 @@ def worker(connection, assets, configs, bank, seed, indices):
                 result = [
                     lane.restore(s)
                     for lane, s in zip(lanes[mode], payload["states"], strict=True)
+                ]
+            elif command == "dynamics":
+                result = [
+                    lane.env.set_dynamics(**payload["gains"]) for lane in lanes[mode]
                 ]
             elif command == "memory":
                 result = rss_bytes()
@@ -251,6 +261,8 @@ class Vector:
                         lanes, payload["actions"], payload["active"], strict=True
                     )
                 ]
+            if command == "dynamics":
+                return [lane.env.set_dynamics(**payload["gains"]) for lane in lanes]
             if command == "state":
                 return [e.state() for e in lanes]
             if command == "restore":
@@ -277,6 +289,17 @@ class Vector:
 
     def step(self, mode, actions, mixture):
         return self._call("step", mode, dict(actions=actions, mixture=mixture))
+
+    def dynamics(self, mode, stiffness, nominal_k, nominal_b):
+        return self._call(
+            "dynamics",
+            mode,
+            dict(
+                gains=dict(
+                    stiffness=stiffness, nominal_k=nominal_k, nominal_b=nominal_b
+                )
+            ),
+        )
 
     def state(self, mode):
         return self._call("state", mode)

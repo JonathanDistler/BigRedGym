@@ -61,7 +61,13 @@ def main():
     p.add_argument("--benchmark", type=Path)
     p.add_argument("--num-envs", type=int, choices=(16, 32))
     p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--updates", type=int, default=10, choices=range(1, 21))
+    p.add_argument(
+        "--updates",
+        type=int,
+        default=None,
+        help="Absolute cumulative update target; resume defaults to saved target",
+    )
+    p.add_argument("--interaction-budget", type=int, default=200000)
     p.add_argument("--horizon", type=int, default=32, choices=(4, 8, 16, 32, 64, 128))
     p.add_argument("--seeds", nargs="+", type=int, default=[42, 43])
     p.add_argument("--resume", type=Path)
@@ -69,7 +75,9 @@ def main():
     p.add_argument("--checkpoint-every", type=int, default=2)
     p.add_argument("--max-seconds", type=float, default=0)
     p.add_argument("--smoke", action="store_true")
-    p.add_argument("--suite", choices=("original", "anticipatory_v1"), default="original")
+    p.add_argument(
+        "--suite", choices=("original", "anticipatory_v1"), default="original"
+    )
     a = p.parse_args()
     os.environ.update(
         WANDB_MODE="disabled",
@@ -100,7 +108,10 @@ def main():
             raise ValueError("MuJoCo runtime changed")
         preparation = Path(protocol["preparation"])
         n = protocol["num_envs"]
-        updates = protocol["updates"]
+        updates = protocol["updates"] if a.updates is None else a.updates
+        if updates < restored["iteration"]:
+            raise ValueError("Update target precedes checkpoint")
+        protocol = dict(protocol, updates=updates)
         horizon = protocol["horizon"]
         seeds = protocol["seeds"]
     else:
@@ -114,14 +125,14 @@ def main():
             selected = json.loads(a.benchmark.read_text())
             n = selected["num_envs"]
             a.workers = selected["workers"]
-        updates = 1 if a.smoke else a.updates
+        updates = 1 if a.smoke else (10 if a.updates is None else a.updates)
         horizon = 4 if a.smoke else a.horizon
         seeds = [42] if a.smoke else a.seeds
-        if n * horizon * updates * 3 * len(seeds) > 200000:
-            p.error(
-                "Pilot exceeds 200k transitions; use a separately reviewed experiment"
-            )
+        if n * horizon * updates * 3 * len(seeds) > a.interaction_budget:
+            p.error("Requested run exceeds explicit --interaction-budget")
         out.mkdir(parents=True, exist_ok=False)
+    if updates < 1 or n * horizon * updates * 3 * len(seeds) > a.interaction_budget:
+        p.error("Invalid update target or cumulative interaction budget exceeded")
     session_index = 0
     while True:
         session = out / "sessions" / f"session_{session_index:04}"
@@ -171,7 +182,9 @@ def main():
             mode = f"{condition}_seed{seed}"
             net, parent = network(manifest["initial"])
             cfg = config(parent, condition)
-            cfg.comparison_suite = protocol.get("comparison_suite", "original") if restored else a.suite
+            cfg.comparison_suite = (
+                protocol.get("comparison_suite", "original") if restored else a.suite
+            )
             optimizer = torch.optim.Adam(net.parameters(), lr=hp["learning_rate"])
             torch.manual_seed(seed + 100000)
             runs[mode] = dict(
@@ -184,13 +197,22 @@ def main():
             configs[mode] = cfg
             lane_seeds[mode] = seed
     configs["evaluation"] = config(parent, "A")
-    configs["evaluation"].comparison_suite = next(iter(configs.values())).comparison_suite
+    configs["evaluation"].comparison_suite = next(
+        iter(configs.values())
+    ).comparison_suite
     lane_seeds["evaluation"] = 0
     if not restored:
         protocol = dict(
             comparison_suite=a.suite,
-            condition_labels=(dict(A="original_fixed_support", B="early_reposition", C="early_reposition_rear_sweep")
-                              if a.suite == "anticipatory_v1" else dict(A="fixed", B="slide", C="catch")),
+            condition_labels=(
+                dict(
+                    A="original_fixed_support",
+                    B="early_reposition",
+                    C="early_reposition_rear_sweep",
+                )
+                if a.suite == "anticipatory_v1"
+                else dict(A="fixed", B="slide", C="catch")
+            ),
             preparation=str(preparation),
             preparation_sha256=sha(preparation / "manifest.json"),
             num_envs=n,

@@ -45,6 +45,8 @@ class CatchPhase(ManeuverPhase):
 
 @dataclass
 class CatchConfig(MomentumConfig):
+    adc_enabled: bool = False
+    capture_enabled: bool = False
     comparison_suite: str = "original"
     anticipation_seconds: float = 0.08
     anticipation_support_sigma: float = 0.3
