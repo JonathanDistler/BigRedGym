@@ -1,0 +1,34 @@
+{
+  "recommended_n": 2,
+  "measurements": [
+    {
+      "n": 1,
+      "worker_processes": 1,
+      "subprocess_workers": 0,
+      "steps_per_second": 33.63971644178284,
+      "peak_rss_kib": 861680
+    },
+    {
+      "n": 2,
+      "worker_processes": 1,
+      "subprocess_workers": 0,
+      "steps_per_second": 39.82795726397974,
+      "peak_rss_kib": 863216
+    },
+    {
+      "n": 4,
+      "worker_processes": 1,
+      "subprocess_workers": 0,
+      "steps_per_second": 36.58681803248382,
+      "peak_rss_kib": 866672
+    }
+  ],
+  "memory": {
+    "MemTotal": 6052020224,
+    "MemAvailable": 4631732224
+  },
+  "cgroup_memory_limit": "max",
+  "torch": "2.13.0+cu130",
+  "torch_threads": 1,
+  "scope": "Conservative short benchmark; one process only, no16-worker configuration"
+}

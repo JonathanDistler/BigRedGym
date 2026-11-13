@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "standing_takeoffs": 4,
+  "standing_n": 4,
+  "balance_successes": 3,
+  "balance_n": 4,
+  "mean_standing_peak_degrees": 44.85895733953873,
+  "baseline_mean_peak_degrees": 44.85895733953873,
+  "balance_holds": [
+    6.175999999999542,
+    6.175999999999542,
+    0.04000000000000002,
+    6.179999999999541
+  ],
+  "standing_failure_causes": [
+    "nonfoot_collision",
+    "nonfoot_collision",
+    "nonfoot_collision",
+    "nonfoot_collision"
+  ],
+  "baseline_file": "output/retained_go2_validation_v1/evaluation.json",
+  "initial": "output/retained_go2_distillation_v3/student.pt",
+  "initial_sha": "0d08913c5f306f4090f62f74001a62a795feee533958e3561adcfee816c984ab",
+  "preparation_sha": "d87ff9a6800aae40a61e8ad2412097cc761634c4092003e5af37826e4a9e9123",
+  "transferred_endpoint_only": true,
+  "source_certificate": "output/retained_go2_validation_v3/retention.json",
+  "replay_proof_sha": "e25aeac3b14edb1186f47046a4a328e2dce7bc76e5410e1dcd86245b9798e32c"
+}

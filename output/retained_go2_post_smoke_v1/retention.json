@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "standing_takeoffs": 4,
+  "standing_n": 4,
+  "balance_successes": 3,
+  "balance_n": 4,
+  "mean_standing_peak_degrees": 45.33529493038341,
+  "baseline_mean_peak_degrees": 44.85895733953873,
+  "balance_holds": [
+    6.175999999999542,
+    6.175999999999542,
+    0.020000000000000004,
+    6.179999999999541
+  ],
+  "standing_failure_causes": [
+    "nonfoot_collision",
+    "nonfoot_collision",
+    "nonfoot_collision",
+    "nonfoot_collision"
+  ],
+  "baseline_file": "output/retained_go2_validation_v1/evaluation.json",
+  "initial": "output/retained_go2_smoke_v4/checkpoint_000002.pt",
+  "initial_sha": "a15387f7883bfb898474ebe296495f083fa477af2e39529fa35320379b2bb2ce",
+  "preparation_sha": "d87ff9a6800aae40a61e8ad2412097cc761634c4092003e5af37826e4a9e9123"
+}

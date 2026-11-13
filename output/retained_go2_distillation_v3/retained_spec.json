@@ -1,0 +1,188 @@
+{
+  "architecture": "ONE actor: ADC MLP93\u2192256\u2192256\u2192128\u219212 + internal affine balance specialization + learned geometry gate16\u21921 + shared correction93\u219264\u219212; critic123\u2192256\u2192256\u2192128\u21921",
+  "composition": "z=ADC(x)+g(x)*(BAL_latent(x)-ADC(x))+correction(x), exact0/1 branches; action=tanh(z)",
+  "initialization": "g disabled and correction last layer zero: ADC deterministic means reproduced exactly against expanded adapter, within2e-6 against original73-input actor",
+  "trained_parameters_stageB": [
+    "router",
+    "shared correction",
+    "critic",
+    "log_std"
+  ],
+  "protected_parameters": [
+    "ADC base coefficients",
+    "balance affine coefficients"
+  ],
+  "normalization": {
+    "expert_running_statistics": null,
+    "common_inputs_unchanged": true,
+    "router_center": [
+      0.8799953460693359,
+      0.000783262075856328,
+      -0.15896157920360565,
+      -0.12929785251617432,
+      -1.4145424365997314,
+      0.10717625170946121,
+      0.1300816833972931,
+      -1.4172160625457764,
+      0.10794222354888916,
+      -0.04040003567934036,
+      -0.026479359716176987,
+      0.0004861695342697203,
+      0.04334285855293274,
+      -0.025451958179473877,
+      0.0006807801546528935,
+      0.8362267017364502
+    ],
+    "router_scale": [
+      0.28158724308013916,
+      0.019999999552965164,
+      0.34791111946105957,
+      0.060095034539699554,
+      0.6237788796424866,
+      0.390569806098938,
+      0.058117128908634186,
+      0.6180523633956909,
+      0.38884636759757996,
+      0.03447805345058441,
+      0.08169767260551453,
+      0.1546972692012787,
+      0.02969197742640972,
+      0.08311530947685242,
+      0.15495765209197998,
+      0.18780289590358734
+    ],
+    "router_inputs": [
+      0,
+      1,
+      2,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      55
+    ],
+    "scope": "Router statistics never transform the ADC/balance head inputs"
+  },
+  "exploration_std_initial": 0.0024787521766663585,
+  "control_hz": 50,
+  "physics_hz": 500,
+  "kp": 60,
+  "kd": 3,
+  "action_scale": 2,
+  "joint_names": [
+    "FL_hip_joint",
+    "FL_thigh_joint",
+    "FL_calf_joint",
+    "FR_hip_joint",
+    "FR_thigh_joint",
+    "FR_calf_joint",
+    "RL_hip_joint",
+    "RL_thigh_joint",
+    "RL_calf_joint",
+    "RR_hip_joint",
+    "RR_thigh_joint",
+    "RR_calf_joint"
+  ],
+  "nominal": [
+    -2.2248883690812155e-09,
+    0.7334159659826462,
+    -1.4654903159477315,
+    2.2248883690812155e-09,
+    0.7334159659826462,
+    -1.4654903159477315,
+    -2.2248883253671876e-09,
+    0.7334159659826462,
+    -1.4654903159477313,
+    2.2248883253671876e-09,
+    0.7334159659826462,
+    -1.4654903159477313
+  ],
+  "joint_limits": [
+    [
+      -1.0472,
+      1.0472
+    ],
+    [
+      -1.5708,
+      3.4907
+    ],
+    [
+      -2.7227,
+      -0.83776
+    ],
+    [
+      -1.0472,
+      1.0472
+    ],
+    [
+      -1.5708,
+      3.4907
+    ],
+    [
+      -2.7227,
+      -0.83776
+    ],
+    [
+      -1.0472,
+      1.0472
+    ],
+    [
+      -0.5236,
+      4.5379
+    ],
+    [
+      -2.7227,
+      -0.83776
+    ],
+    [
+      -1.0472,
+      1.0472
+    ],
+    [
+      -0.5236,
+      4.5379
+    ],
+    [
+      -2.7227,
+      -0.83776
+    ]
+  ],
+  "torque_limits": [
+    23.7,
+    23.7,
+    45.43,
+    23.7,
+    23.7,
+    45.43,
+    23.7,
+    23.7,
+    45.43,
+    23.7,
+    23.7,
+    45.43
+  ],
+  "speed_limits": [
+    30.1,
+    30.1,
+    15.7,
+    30.1,
+    30.1,
+    15.7,
+    30.1,
+    30.1,
+    15.7,
+    30.1,
+    30.1,
+    15.7
+  ],
+  "model_sha": "0d08913c5f306f4090f62f74001a62a795feee533958e3561adcfee816c984ab",
+  "scope": "Deterministic skill preservation; original stochastic exploration distribution intentionally not copied. No hardware deployment."
+}

@@ -1,0 +1,14 @@
+{
+  "source_preparation": "output/retained_go2_preparation_v2",
+  "source_certificate": "output/retained_go2_validation_v3/retention.json",
+  "configs_identical": true,
+  "entire_reset_bank_identical": true,
+  "capture_centers_identical": true,
+  "unique_demonstration_frames": 1870,
+  "replay_rows": 3100,
+  "role_rows": [
+    1550,
+    1550
+  ],
+  "scope": "Endpoint certificate reuse only: same actor and endpoint physical states/configs, not a new simulated evaluation. Duplicates rebalance teacher sampling; they are not new experience."
+}
