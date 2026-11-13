@@ -1,0 +1,246 @@
+{
+  "source": "output/retained_go2_validation_v3/videos/student_standing_0_physics.csv",
+  "flight_time": 0.6820000000000005,
+  "first_stall_time": 0.8240000000000006,
+  "flight": {
+    "pitch": 0.5004898550228453,
+    "pitch_velocity": 1.7648260490365044,
+    "com_support_x": -0.16655073690849515,
+    "com_velocity_x": 0.32773848606647366,
+    "L_com": 1.050958291662813,
+    "front_moment_com": -8.202932761415317,
+    "rear_moment_com": 0.0,
+    "front_slip_speed": 0.07275562941156127,
+    "front_force_z": 191.3750272446942,
+    "calf_clearance": 0.021115686870986944,
+    "head_clearance": 0.05043910350003382,
+    "saturated_fraction": 0.0,
+    "tracking_rmse": 0.09575940605859136,
+    "rear_clearance": 0.03193075322296517,
+    "mechanical_energy": 45.25573899943676,
+    "FL_thigh_joint_q": 0.7175075219564561,
+    "FL_thigh_joint_v": 0.03309220752555042,
+    "FL_thigh_joint_tau": -9.224780641292327,
+    "FL_calf_joint_q": -2.3042749342422635,
+    "FL_calf_joint_v": -1.3672895871516504,
+    "FL_calf_joint_tau": 12.41590253974061,
+    "FR_thigh_joint_q": 0.7044703690837859,
+    "FR_thigh_joint_v": -0.010653017606956222,
+    "FR_thigh_joint_tau": -9.755851519784983,
+    "FR_calf_joint_q": -2.298842137711895,
+    "FR_calf_joint_v": -1.3962652381106908,
+    "FR_calf_joint_tau": 12.31136888857773,
+    "RL_thigh_joint_q": 0.4862939046796341,
+    "RL_thigh_joint_v": 2.3550384165607463,
+    "RL_thigh_joint_tau": 0.4549171555716498,
+    "RL_calf_joint_q": -1.0048607174122084,
+    "RL_calf_joint_v": 1.5360556128613096,
+    "RL_calf_joint_tau": -4.697395962153064,
+    "RR_thigh_joint_q": 0.48651303552979247,
+    "RR_thigh_joint_v": 2.4341539073387297,
+    "RR_thigh_joint_tau": 0.6481388518402529,
+    "RR_calf_joint_q": -1.0008738182085488,
+    "RR_calf_joint_v": 1.5810556687180246,
+    "RR_calf_joint_tau": -4.599280148133017
+  },
+  "stall": {
+    "pitch": 0.6302924519898848,
+    "pitch_velocity": -0.03017025748866735,
+    "com_support_x": -0.19227805633707312,
+    "com_velocity_x": -0.557953546676714,
+    "L_com": 0.06915345435010771,
+    "front_moment_com": -8.97055149022145,
+    "rear_moment_com": 0.0,
+    "front_slip_speed": 0.03514214811943244,
+    "front_force_z": 159.0404827671147,
+    "calf_clearance": 0.01787754443956603,
+    "head_clearance": 0.06311523636797818,
+    "saturated_fraction": 0.0,
+    "tracking_rmse": 0.22740230798351738,
+    "rear_clearance": 0.1713581725165601,
+    "mechanical_energy": 54.94720869230554,
+    "FL_thigh_joint_q": 0.34255537272528547,
+    "FL_thigh_joint_v": -4.212738361528095,
+    "FL_thigh_joint_tau": -5.183885620950949,
+    "FL_calf_joint_q": -2.1851441332968244,
+    "FL_calf_joint_v": 3.0656870320356546,
+    "FL_calf_joint_tau": 12.206558273793723,
+    "FR_thigh_joint_q": 0.3169151666953791,
+    "FR_thigh_joint_v": -4.2887771673996475,
+    "FR_thigh_joint_tau": -4.992181146988749,
+    "FR_calf_joint_q": -2.1818995007200934,
+    "FR_calf_joint_v": 3.087169041713734,
+    "FR_calf_joint_tau": 12.56882589861949,
+    "RL_thigh_joint_q": 0.7572614056463,
+    "RL_thigh_joint_v": 2.8938819255290693,
+    "RL_thigh_joint_tau": 0.7835258926286013,
+    "RL_calf_joint_q": -1.3211882521836098,
+    "RL_calf_joint_v": -5.798201606649963,
+    "RL_calf_joint_tau": -1.392971034882951,
+    "RR_thigh_joint_q": 0.7697971193530002,
+    "RR_thigh_joint_v": 2.9536082787173763,
+    "RR_thigh_joint_tau": 0.731443027542209,
+    "RR_calf_joint_q": -1.3042445489697267,
+    "RR_calf_joint_v": -5.727266504799732,
+    "RR_calf_joint_tau": -1.3768847550935064
+  },
+  "critical_interval": {
+    "pitch": {
+      "min": 0.31150629804855995,
+      "max": 0.6303527981124317
+    },
+    "pitch_velocity": {
+      "min": -1.3381407262816127,
+      "max": 3.3164769496632496
+    },
+    "com_support_x": {
+      "min": -0.22845536686453588,
+      "max": -0.020119762926630248
+    },
+    "com_velocity_x": {
+      "min": -0.6407331214805986,
+      "max": 0.465913081392332
+    },
+    "L_com": {
+      "min": -0.5813036967101717,
+      "max": 1.4852151184282412
+    },
+    "front_moment_com": {
+      "min": -15.26888420428758,
+      "max": 0.0
+    },
+    "rear_moment_com": {
+      "min": -12.51456813178557,
+      "max": 0.0
+    },
+    "front_slip_speed": {
+      "min": 0.008577281973509371,
+      "max": 0.127619374422307
+    },
+    "front_force_z": {
+      "min": 0.0,
+      "max": 275.66093298580927
+    },
+    "calf_clearance": {
+      "min": 0.017310534471220697,
+      "max": 0.021136314251635063
+    },
+    "head_clearance": {
+      "min": 0.038181864145616334,
+      "max": 0.09340533512870834
+    },
+    "saturated_fraction": {
+      "min": 0.0,
+      "max": 0.0
+    },
+    "tracking_rmse": {
+      "min": 0.07651409704783037,
+      "max": 0.2561536558446516
+    },
+    "rear_clearance": {
+      "min": -0.0004528219255536918,
+      "max": 0.21585191574946055
+    },
+    "mechanical_energy": {
+      "min": 44.326866339439555,
+      "max": 57.83116562616591
+    },
+    "FL_thigh_joint_q": {
+      "min": 0.15490544884247093,
+      "max": 0.730317697295094
+    },
+    "FL_thigh_joint_v": {
+      "min": -4.33574273979339,
+      "max": 0.2614797138723613
+    },
+    "FL_thigh_joint_tau": {
+      "min": -15.535896526498671,
+      "max": 7.653481090685782
+    },
+    "FL_calf_joint_q": {
+      "min": -2.340031575773325,
+      "max": -1.9979689450633955
+    },
+    "FL_calf_joint_v": {
+      "min": -1.6659197449444196,
+      "max": 3.36346163298555
+    },
+    "FL_calf_joint_tau": {
+      "min": -0.14735462368725916,
+      "max": 17.223795078273977
+    },
+    "FR_thigh_joint_q": {
+      "min": 0.12544280504665753,
+      "max": 0.7217541193861612
+    },
+    "FR_thigh_joint_v": {
+      "min": -4.418505444757951,
+      "max": 0.24572825761789818
+    },
+    "FR_thigh_joint_tau": {
+      "min": -15.732214400639414,
+      "max": 7.835710159775026
+    },
+    "FR_calf_joint_q": {
+      "min": -2.3362576855363075,
+      "max": -1.9931007034189132
+    },
+    "FR_calf_joint_v": {
+      "min": -1.685105802411197,
+      "max": 3.390218861243171
+    },
+    "FR_calf_joint_tau": {
+      "min": -0.13534697140152385,
+      "max": 17.43800240146167
+    },
+    "RL_thigh_joint_q": {
+      "min": 0.35234532637442423,
+      "max": 0.9172937300438738
+    },
+    "RL_thigh_joint_v": {
+      "min": -3.4140604201869773,
+      "max": 3.2916501782341148
+    },
+    "RL_thigh_joint_tau": {
+      "min": -1.5882340725634236,
+      "max": 18.636726670512225
+    },
+    "RL_calf_joint_q": {
+      "min": -1.6556621616579956,
+      "max": -0.9868744460337985
+    },
+    "RL_calf_joint_v": {
+      "min": -6.973457840466477,
+      "max": 9.356998878485424
+    },
+    "RL_calf_joint_tau": {
+      "min": -7.975566662800636,
+      "max": 17.303606660281464
+    },
+    "RR_thigh_joint_q": {
+      "min": 0.351110653567619,
+      "max": 0.9310442278481078
+    },
+    "RR_thigh_joint_v": {
+      "min": -3.4339712891391154,
+      "max": 3.3007533747483975
+    },
+    "RR_thigh_joint_tau": {
+      "min": -1.5083063212266845,
+      "max": 18.52740235046744
+    },
+    "RR_calf_joint_q": {
+      "min": -1.6371878046014883,
+      "max": -0.9819620030503845
+    },
+    "RR_calf_joint_v": {
+      "min": -6.977721766014148,
+      "max": 9.280331038502084
+    },
+    "RR_calf_joint_tau": {
+      "min": -8.039257554649902,
+      "max": 17.03873302213282
+    }
+  },
+  "interpretation": "Local first stall, not global episode maximum. Opposing front contact moment is measured; no causal reward ablation claimed. Reset prioritization uses existing pre-stall native states, without invented teacher actions."
+}

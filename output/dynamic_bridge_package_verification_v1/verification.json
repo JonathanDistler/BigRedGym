@@ -1,0 +1,23 @@
+{
+  "extracted": "/tmp/retained_clean_a7xh4txv",
+  "files": 628,
+  "checks": [
+    {
+      "check": 0,
+      "returncode": 0
+    },
+    {
+      "check": 1,
+      "returncode": 0
+    },
+    {
+      "check": 2,
+      "returncode": 0
+    },
+    {
+      "check": 3,
+      "returncode": 0
+    }
+  ],
+  "dependency_scope": "Reused installed pinned binaries; no original repository or editable hooks; live Molab install not executed"
+}
