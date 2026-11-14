@@ -1,0 +1,16 @@
+{
+  "status": "PREPARED, NOT RUN; not recommended on unchanged takeoff objective",
+  "updates": 200,
+  "maximum_prepared_updates": 500,
+  "envs": 1,
+  "rollout_steps": 64,
+  "trials_per_validation": 2,
+  "seed": 4110,
+  "evaluation_interval_updates": 1,
+  "checkpoint_interval_updates": 1,
+  "standing_start_horizon_seconds": 0.96,
+  "requires_explicit_cli_flag": "--allow-long-takeoff-continuation",
+  "stop_condition": "two consecutive nominal takeoff failures; any nonfinite loss, gradient, observation or control",
+  "next_meaningful_change": "Validate 1.28-second corrective capture prefixes and train that longer horizon first",
+  "full_maneuver_or_5000_update_authorization": false
+}

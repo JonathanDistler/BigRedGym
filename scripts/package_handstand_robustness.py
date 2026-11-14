@@ -15,6 +15,8 @@ def main():
     parser.add_argument("--reference", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--teacher", type=Path)
+    parser.add_argument("--feedback", type=Path)
+    parser.add_argument("--baseline-checkpoint", type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
 
@@ -44,7 +46,14 @@ def main():
         )
         or p.startswith("scripts/")
         and "handstand" in p
-        or p in ("pyproject.toml", "uv.lock", "docs/handstand_robustness.md")
+        or p
+        in (
+            "pyproject.toml",
+            "uv.lock",
+            "docs/handstand_robustness.md",
+            "docs/handstand_takeoff_molab.md",
+            "notebooks/molab_handstand_takeoff.py",
+        )
     }
     selected["artifacts/handstand_reference/trajectory.npz"] = args.reference
     if args.checkpoint:
@@ -53,6 +62,10 @@ def main():
         if digest(args.teacher) != expected["balance_sha256"]:
             parser.error("Teacher hash mismatch")
         selected["artifacts/balance.pt"] = args.teacher
+    if args.feedback:
+        selected["artifacts/takeoff_teacher.npz"] = args.feedback
+    if args.baseline_checkpoint:
+        selected["artifacts/baseline_student.pt"] = args.baseline_checkpoint
     manifest = dict(
         source_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
@@ -67,6 +80,9 @@ def main():
         entry = tarfile.TarInfo("bundle_manifest.json")
         entry.size = len(contents)
         archive.addfile(entry, io.BytesIO(contents))
+    args.output.with_suffix(args.output.suffix + ".sha256").write_text(
+        digest(args.output) + "  " + args.output.name + "\n"
+    )
     print(
         json.dumps(
             dict(
