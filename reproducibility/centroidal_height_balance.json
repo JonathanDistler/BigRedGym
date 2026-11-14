@@ -1,0 +1,34 @@
+{
+  "reference_manifest": "reproducibility/centroidal_capture_reference.json",
+  "preserved_prefix_seconds": 1.32,
+  "control_dt": 0.02,
+  "physics_dt": 0.002,
+  "candidates": 3,
+  "parameters": {
+    "front_hip_normalized": -0.0204364,
+    "front_knee_normalized": 0.10256115,
+    "pulse_duration": 0.64517335,
+    "balance_delay": 0.05048272
+  },
+  "strict_seconds": 5.01399999999967,
+  "cold_replay_error": 0.0,
+  "five_second_success": true,
+  "files": {
+    "output/centroidal_height_verified_20261114/motion.gif": {
+      "sha256": "c8c5d9477698b3b14a14fe944676623205dd6155b6ac840d9e84c615783c9d07",
+      "bytes": 588701
+    },
+    "output/centroidal_height_verified_20261114/trajectory.pt": {
+      "sha256": "72de86f4390f31e80b068ca9975584cc5b15c24fea1ae90cea15becbf109a5ee",
+      "bytes": 16303131
+    },
+    "output/centroidal_height_verified_20261114/cold_replay.json": {
+      "sha256": "d86e33cf298c6dccce1bd674752edefa157652c9838c45435fdfb11c8a629c4d",
+      "bytes": 196
+    },
+    "output/centroidal_height_verified_20261114/search.pt": {
+      "sha256": "a12b36854eb682f0666fd6701a1386a4ffd12d9edf68f0193930515aad233732",
+      "bytes": 157939
+    }
+  }
+}
