@@ -1,0 +1,125 @@
+{
+  "reference": "output/centroidal_capture_reference_20261114",
+  "source_commit": "15fab3f",
+  "seed": 96000,
+  "control_dt": 0.02,
+  "physics_dt": 0.002,
+  "kp": 60.0,
+  "kd": 3.0,
+  "mujoco": "3.11.0",
+  "replay_max_error": 0.0,
+  "files": {
+    "output/centroidal_capture_reference_20261114/capture.gif": {
+      "sha256": "66aeeb75021c86fa05f4f5b2779df4c89253b3ec3c840df2da45b6f1910c7a76",
+      "bytes": 245472
+    },
+    "output/centroidal_capture_reference_20261114/prefix_physics.pt": {
+      "sha256": "041e46c29e6eaba43b5861623b6fdb6de51df9ac937717dc3afbf2499de2ff26",
+      "bytes": 5519767
+    },
+    "output/centroidal_capture_reference_20261114/capture.pt": {
+      "sha256": "688abd50351a5b84d61c48050372158377a1c9c6cce78b0ff6f6e0671ead16a9",
+      "bytes": 895067
+    },
+    "output/centroidal_capture_reference_20261114/inputs.pt": {
+      "sha256": "923b60fda3a99c97a93f68c7f93754edc99437ce61727844f98916c039e45928",
+      "bytes": 164327
+    },
+    "output/centroidal_capture_reference_20261114/actuator_contract.npz": {
+      "sha256": "1c7d72754fc0596bb433700d0c971c5f8dc8020b838dd8409e9138fe36d7aa5c",
+      "bytes": 3756
+    },
+    "output/centroidal_capture_reference_20261114/contact_audit.pt": {
+      "sha256": "bbce43bf5bc5ad788c58c7fb96cacf28f64c85017a744a6550edb2cf94110d02",
+      "bytes": 3113377
+    },
+    "output/centroidal_capture_reference_20261114/nominal.mjb": {
+      "sha256": "88e1262f6ed541d20774d8b0f14c00b98fb7cc0fdc98b7860b850af10f317b9a",
+      "bytes": 39349
+    },
+    "output/centroidal_capture_reference_20261114/continuation.pt": {
+      "sha256": "a219ef324b5b8d729d7ca5c746d5c5373abe34998c30450c15fc5bbe1606243a",
+      "bytes": 1041703
+    },
+    "output/centroidal_capture_reference_20261114/config.json": {
+      "sha256": "3e2115d9256a25ac603f2f98416707d8109460e776f90c6fafdfaa682b02583b",
+      "bytes": 1966
+    },
+    "output/retained_go2_preparation_v3/balance.pt": {
+      "sha256": "bcd6a1f5b59ebe905b73be8080e7a21e1b714f22a7b239c9111d2ee4a8b94fcd",
+      "bytes": 9179
+    },
+    "output/retained_go2_preparation_v3/replay_balance.json": {
+      "sha256": "e25aeac3b14edb1186f47046a4a328e2dce7bc76e5410e1dcd86245b9798e32c",
+      "bytes": 544
+    },
+    "output/retained_go2_preparation_v3/compatibility_initial_mlp.json": {
+      "sha256": "ad599bddde05fc413f62cd7dbc0304f48262e3e0d9f49b683a1e65e9f72c63a6",
+      "bytes": 4806
+    },
+    "output/retained_go2_preparation_v3/shooting_0.pt": {
+      "sha256": "62338c0332119ed341579afc2018349ec39bb84ce5a70680fdef2eca3a96f1ac",
+      "bytes": 1940991
+    },
+    "output/retained_go2_preparation_v3/compatibility.json": {
+      "sha256": "7acb690f763791a89b31373289710a9aff732d619104fbf6cd01e1169c633d1e",
+      "bytes": 5260
+    },
+    "output/retained_go2_preparation_v3/shooting_2.pt": {
+      "sha256": "d75310b09496ed6f8bb4f679026f7da09e04266e3e3601bd00e2fb38c7bc331a",
+      "bytes": 1940543
+    },
+    "output/retained_go2_preparation_v3/demonstrations.npz": {
+      "sha256": "4c66f423ea7419a24d03571ce52476c8371ff1e576b71ce0c7a6005673ac952a",
+      "bytes": 921960
+    },
+    "output/retained_go2_preparation_v3/capture_region.json": {
+      "sha256": "b02daac08388c17b1cdce8c0a4f04946e923bbe8a6a086cae47ce6268df9f96e",
+      "bytes": 4755
+    },
+    "output/retained_go2_preparation_v3/manifest_initial_mlp.json": {
+      "sha256": "4342fc4fc220cd4b71a2139e6631c604e23b89b1e9b4b079f052d7866024bf02",
+      "bytes": 609
+    },
+    "output/retained_go2_preparation_v3/shooting_1.pt": {
+      "sha256": "2d240bcd5b3b3244d9951f54cb9a7cc217f66eecf431d639c030d2cb1595975a",
+      "bytes": 1941055
+    },
+    "output/retained_go2_preparation_v3/shooting_3.pt": {
+      "sha256": "d1bf4ef8ffb555828c08d1739d050b570131f47fbfcb2d67ce024a9b253ce95c",
+      "bytes": 1940991
+    },
+    "output/retained_go2_preparation_v3/bank.pt": {
+      "sha256": "f89f5a09fff9bfdbc66f4466279095f7d2503e0bea63c5cf9da60d7cc9bd0777",
+      "bytes": 2485083
+    },
+    "output/retained_go2_preparation_v3/adc.pt": {
+      "sha256": "7c03d6a27fc44b3d37aa5d2b727ebc007208bb59dff645167a5ff601900aa920",
+      "bytes": 4333928
+    },
+    "output/retained_go2_preparation_v3/bridge_provenance.json": {
+      "sha256": "899f95c6580b39e97e3626811c5ddbd0a209522f05406f315bd4eda4f8998f1a",
+      "bytes": 10112
+    },
+    "output/retained_go2_preparation_v3/native_shooting.json": {
+      "sha256": "5a4718bf0ca05039787a1944b9a2695ef02abd569f9e5a26f5ae62290622bee3",
+      "bytes": 1545
+    },
+    "output/retained_go2_preparation_v3/config.json": {
+      "sha256": "3e2115d9256a25ac603f2f98416707d8109460e776f90c6fafdfaa682b02583b",
+      "bytes": 1966
+    },
+    "output/retained_go2_preparation_v3/manifest.json": {
+      "sha256": "d87ff9a6800aae40a61e8ad2412097cc761634c4092003e5af37826e4a9e9123",
+      "bytes": 1443
+    },
+    "output/centroidal_capture_83_v3/best.pt": {
+      "sha256": "688abd50351a5b84d61c48050372158377a1c9c6cce78b0ff6f6e0671ead16a9",
+      "bytes": 895067
+    },
+    "output/centroidal_capture_83_continuation_v1/replay.pt": {
+      "sha256": "a219ef324b5b8d729d7ca5c746d5c5373abe34998c30450c15fc5bbe1606243a",
+      "bytes": 1041703
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "final_state_error": 0.0,
+  "certified_takeoff": true,
+  "five_second_success": false,
+  "strict_hold_seconds": 0.05800000000000004,
+  "termination": "running",
+  "final_time": 1.8200000000000014,
+  "independent_checkout_base": "15fab3f",
+  "python_isolated": true,
+  "editable_hooks_disabled": true,
+  "large_data_sha256_verified": true
+}
