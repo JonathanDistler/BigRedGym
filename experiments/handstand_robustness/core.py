@@ -175,6 +175,8 @@ class Environment(Replay):
                 # MuJoCo xfrc is world force/torque at body's COM.
                 self.d.xfrc_applied[self.base] = push["wrench"]
             mujoco.mj_step(self.m, self.d)
+            if hasattr(self, "after_physics_step"):
+                self.after_physics_step()
             mujoco.mj_forward(self.m, self.d)
             self.measure(velocity)
             if self.takeoff and self.takeoff_time is None:

@@ -38,7 +38,14 @@ def run(
     feedback=True,
     collect=False,
 ):
-    e = env(trajectory, seed, condition, horizon)
+    if getattr(actor, "checkpoint_kind", None) == "capture_residual_v1":
+        from experiments.handstand_robustness.capture import CaptureTrainingEnvironment
+
+        e = CaptureTrainingEnvironment(
+            build_model(), trajectory, seed, condition, horizon
+        )
+    else:
+        e = env(trajectory, seed, condition, horizon)
     data = []
     for k in range(horizon):
         obs = e.observation()
@@ -58,6 +65,11 @@ def run(
 
 
 def evaluate(trajectory, actor, trials=4, horizon=48, feedback=True):
+    if (
+        getattr(actor, "checkpoint_kind", None) == "capture_residual_v1"
+        and horizon == 48
+    ):
+        horizon = int(actor.active_steps)
     rows = []
     for i in range(trials + 1):
         condition = {} if i == 0 else {"joint_position": 0.003, "joint_velocity": 0.03}
@@ -65,7 +77,9 @@ def evaluate(trajectory, actor, trials=4, horizon=48, feedback=True):
         rows.append(row | dict(seed=90110 + i, condition=condition))
     return dict(
         nominal=rows[0],
-        heldout_successes=sum(r["takeoff_success"] for r in rows[1:]),
+        heldout_successes=sum(
+            r.get("objective_success", r["takeoff_success"]) for r in rows[1:]
+        ),
         heldout_trials=trials,
         full_maneuver_successes=sum(r["complete_success"] for r in rows),
         rows=rows,
@@ -75,7 +89,21 @@ def evaluate(trajectory, actor, trials=4, horizon=48, feedback=True):
 def load(path):
     saved = torch.load(path, map_location="cpu", weights_only=False)
     state = saved["policy"]
-    if saved.get("kind") == "takeoff_residual_v1":
+    if saved.get("kind") == "capture_residual_v1":
+        from experiments.handstand_robustness.capture import CapturePolicy
+
+        balance = {
+            key: state["balance_" + key].numpy()
+            for key in ["weight", "bias", "lower", "upper"]
+        }
+        p = CapturePolicy(
+            state["actions"],
+            state["centers"],
+            balance,
+            int(state["active_steps"]),
+            float(state["bound"]),
+        )
+    elif saved.get("kind") == "takeoff_residual_v1":
         p = ResidualPolicy(state["actions"], state["centers"], float(state["bound"]))
     else:
         p = Policy()
@@ -85,7 +113,7 @@ def load(path):
 
 def save(path, policy, optimizer, update, args, history, best, stale=0, select=False):
     contents = dict(
-        kind="takeoff_residual_v1",
+        kind=getattr(policy, "checkpoint_kind", "takeoff_residual_v1"),
         schema=1,
         policy=policy.state_dict(),
         optimizer=optimizer.state_dict(),
@@ -95,7 +123,12 @@ def save(path, policy, optimizer, update, args, history, best, stale=0, select=F
         python_rng=random.getstate(),
         reference_sha256=args.trajectory_sha256,
         curriculum=dict(
-            task="standing_takeoff",
+            task="standing_capture"
+            if hasattr(policy, "active_steps")
+            else "standing_takeoff",
+            prefix_steps=int(policy.active_steps)
+            if hasattr(policy, "active_steps")
+            else 48,
             level=0 if update <= 5 else 1,
             intermediate_starts=False,
         ),
@@ -211,11 +244,77 @@ def diagnose(args, t):
     )
 
 
+def validate_capture_continuation(args):
+    proof_path = getattr(args, "capture_continuation_proof", None)
+    if not proof_path:
+        raise ValueError(
+            "Capture updates >50 require objective-improvement and Molab proof"
+        )
+    proof = json.loads(Path(proof_path).read_text())
+
+    def checked(key):
+        entry = proof[key]
+        path = Path(entry["path"])
+        if sha256(path) != entry["sha256"]:
+            raise ValueError("Capture proof file hash mismatch")
+        return json.loads(path.read_text())
+
+    paired = checked("paired_full_report")
+    reference = paired["result"]["reference"]["rows"][1:]
+    student = paired["result"]["student"]["rows"][1:]
+    if len(student) < 20 or len(reference) != len(student):
+        raise ValueError("At least 20 paired held-out trials are required")
+    for a, b in zip(reference, student):
+        if (a["seed"], a["condition"], a["horizon_seconds"]) != (
+            b["seed"],
+            b["condition"],
+            b["horizon_seconds"],
+        ):
+            raise ValueError(
+                "Capture proof requires identical held-out starts and horizons"
+            )
+    if sum(r["complete_success"] for r in student) <= sum(
+        r["complete_success"] for r in reference
+    ):
+        raise ValueError("No objective improvement over complete phase prior")
+    provenance = paired["provenance"]
+    if (
+        provenance["checkpoint_sha256"] != sha256(args.checkpoint)
+        or provenance["reference_sha256"] != args.trajectory_sha256
+    ):
+        raise ValueError("Capture proof checkpoint/reference mismatch")
+    benchmark = checked("molab_benchmark")["result"]
+    receipt = checked("molab_resume_receipt")
+    if not (
+        proof.get("runtime_location") == "molab"
+        and benchmark
+        and all(r["transitions_per_second"] > 0 for r in benchmark)
+        and receipt.get("exact_resume") is True
+        and receipt.get("checkpoint_kind") == "capture_residual_v1"
+        and receipt.get("reference_sha256") == args.trajectory_sha256
+    ):
+        raise ValueError(
+            "Capture proof lacks measured Molab throughput or exact resume"
+        )
+    # Evidence hashes protect accidental mixing; runtime location is a declared
+    # provenance field, not remote attestation or a security boundary.
+
+
 def train(args, t):
     p, saved = load(args.checkpoint)
     if not isinstance(p, ResidualPolicy):
         raise ValueError("Takeoff PPO requires validated residual BC checkpoint")
-    optimizer = torch.optim.Adam(p.parameters(), lr=1e-4)
+    make_env = env
+    if getattr(p, "checkpoint_kind", None) == "capture_residual_v1":
+        from experiments.handstand_robustness.capture import CaptureTrainingEnvironment
+
+        def make_env(trajectory, seed, condition):
+            return CaptureTrainingEnvironment(
+                build_model(), trajectory, seed, condition, int(p.active_steps)
+            )
+
+    capture_task = getattr(p, "checkpoint_kind", None) == "capture_residual_v1"
+    optimizer = torch.optim.Adam(p.parameters(), lr=1e-5 if capture_task else 1e-4)
     update = 0
     history = []
     best = None
@@ -250,14 +349,27 @@ def train(args, t):
                 "Previous selected weights unavailable; selection restarts explicitly"
             )
             best = None
+    if capture_task and args.updates > 50:
+        validate_capture_continuation(args)
     if args.updates > 5:
         smoke = saved.get("history", [])
-        if saved["update"] < 2 or not smoke or not all(r["finite"] for r in smoke):
+        healthy = all(r.get("ppo_healthy", r["finite"]) for r in smoke)
+        if capture_task:
+            healthy &= all(
+                abs(r.get("final_approx_kl", r["diagnostics"]["approx_kl"])) < 0.05
+                for r in smoke
+            )
+        if saved["update"] < 2 or not smoke or not healthy:
             raise ValueError(
                 "Pilot >5 updates requires resumed healthy simulator smoke"
             )
         health = evaluate(t, p, 2)
-        if not health["nominal"]["takeoff_success"] or health["heldout_successes"] == 0:
+        if (
+            not health["nominal"].get(
+                "objective_success", health["nominal"]["takeoff_success"]
+            )
+            or health["heldout_successes"] == 0
+        ):
             raise ValueError("Pilot blocked: no held-out standing takeoff skill")
     start_time = time.perf_counter()
     start_cpu = time.process_time()
@@ -269,7 +381,7 @@ def train(args, t):
         qnoise, vnoise = (0.001, 0.01) if update <= 5 else (0.002, 0.02)
         for world in range(args.envs):
             episode_id = 0
-            e = env(
+            e = make_env(
                 t,
                 args.seed + update * 1000 + world * 10,
                 {"joint_position": qnoise, "joint_velocity": vnoise},
@@ -292,7 +404,7 @@ def train(args, t):
                 if done:
                     episodes.append(e.result())
                     episode_id += 1
-                    e = env(
+                    e = make_env(
                         t,
                         args.seed + update * 1000 + world * 10 + episode_id,
                         {"joint_position": qnoise, "joint_velocity": vnoise},
@@ -318,11 +430,17 @@ def train(args, t):
         returns = torch.tensor([r[4] for r in records])
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
         diagnostics = []
+        kl_stopped = False
         for epoch in range(4):
             for idx in torch.randperm(len(x)).split(128):
                 dist = p.distribution(x[idx])
                 log = dist.log_prob(a[idx]).sum(-1)
-                ratio = (log - old[idx]).exp()
+                log_ratio = log - old[idx]
+                ratio = log_ratio.exp()
+                estimated_kl = ((ratio - 1) - log_ratio).mean()
+                if capture_task and float(estimated_kl.detach()) > 0.02:
+                    kl_stopped = True
+                    break
                 actor_loss = -torch.minimum(
                     ratio * adv[idx], ratio.clamp(0.8, 1.2) * adv[idx]
                 ).mean()
@@ -345,16 +463,32 @@ def train(args, t):
                         ),
                     )
                 )
+            if kl_stopped:
+                break
+        with torch.no_grad():
+            final_log = p.distribution(x).log_prob(a).sum(-1)
+            log_ratio = final_log - old
+            final_kl = float(((log_ratio.exp() - 1) - log_ratio).mean())
         validation = evaluate(t, p, args.trials)
         score = (
-            int(validation["nominal"]["takeoff_success"]),
+            int(
+                validation["nominal"].get(
+                    "objective_success", validation["nominal"]["takeoff_success"]
+                )
+            ),
             validation["heldout_successes"],
             -sum(r["max_pitch_deg"] < 10 for r in validation["rows"]),
         )
         improved = best is None or tuple(score) > tuple(best)
         if improved:
             best = score
-        stale = 0 if validation["nominal"]["takeoff_success"] else stale + 1
+        stale = (
+            0
+            if validation["nominal"].get(
+                "objective_success", validation["nominal"]["takeoff_success"]
+            )
+            else stale + 1
+        )
         elapsed = time.perf_counter() - start_time
         row = dict(
             update=update,
@@ -363,6 +497,12 @@ def train(args, t):
                 sum(r["transitions"] for r in history) + args.envs * args.rollout_steps
             ),
             training_takeoffs=sum(r["takeoff_success"] for r in episodes),
+            training_captures=sum(r.get("capture_success", False) for r in episodes),
+            final_approx_kl=final_kl,
+            kl_early_stopped=kl_stopped,
+            ppo_healthy=bool(
+                np.isfinite(final_kl) and (not capture_task or final_kl < 0.05)
+            ),
             completed_training_episodes=len(episodes),
             reward_components=reward_totals,
             diagnostics={
@@ -418,6 +558,9 @@ def train(args, t):
             ),
             flush=True,
         )
+        if capture_task and not row["ppo_healthy"]:
+            print("STOP: capture PPO KL exceeded healthy update bound", flush=True)
+            break
         if stale >= 2:
             print("STOP: nominal takeoff lost in two validations", flush=True)
             break
@@ -426,10 +569,19 @@ def train(args, t):
 
 def benchmark(args, t):
     p, _ = load(args.checkpoint)
+    make_env = env
+    if getattr(p, "checkpoint_kind", None) == "capture_residual_v1":
+        from experiments.handstand_robustness.capture import CaptureTrainingEnvironment
+
+        def make_env(trajectory, seed):
+            return CaptureTrainingEnvironment(
+                build_model(), trajectory, seed, horizon=int(p.active_steps)
+            )
+
     rows = []
     for count in args.env_counts:
         for length in args.lengths:
-            worlds = [env(t, args.seed + i) for i in range(count)]
+            worlds = [make_env(t, args.seed + i) for i in range(count)]
             start = time.perf_counter()
             cpu = time.process_time()
             completed = 0
@@ -441,7 +593,7 @@ def benchmark(args, t):
                     _, _, done = e.step(actions[i])
                     completed += 1
                     if done:
-                        worlds[i] = env(t, args.seed + i + k)
+                        worlds[i] = make_env(t, args.seed + i + k)
             elapsed = time.perf_counter() - start
             row = dict(
                 envs=count,
@@ -477,6 +629,7 @@ def main():
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--teacher", type=Path)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--capture-continuation-proof", type=Path)
     parser.add_argument("--updates", type=int, default=3)
     parser.add_argument(
         "--allow-long-takeoff-continuation",

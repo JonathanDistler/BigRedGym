@@ -17,6 +17,11 @@ def main():
     parser.add_argument("--teacher", type=Path)
     parser.add_argument("--feedback", type=Path)
     parser.add_argument("--baseline-checkpoint", type=Path)
+    parser.add_argument("--capture-checkpoint", type=Path)
+    parser.add_argument("--takeoff-checkpoint", type=Path)
+    parser.add_argument("--capture-validation", type=Path)
+    parser.add_argument("--capture-demonstrations", type=Path)
+    parser.add_argument("--capture-trained-checkpoint", type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
 
@@ -52,6 +57,7 @@ def main():
             "uv.lock",
             "docs/handstand_robustness.md",
             "docs/handstand_takeoff_molab.md",
+            "docs/handstand_capture.md",
             "notebooks/molab_handstand_takeoff.py",
         )
     }
@@ -66,6 +72,15 @@ def main():
         selected["artifacts/takeoff_teacher.npz"] = args.feedback
     if args.baseline_checkpoint:
         selected["artifacts/baseline_student.pt"] = args.baseline_checkpoint
+    for source, name in [
+        (args.capture_checkpoint, "capture_student.pt"),
+        (args.capture_trained_checkpoint, "capture_ppo_latest.pt"),
+        (args.takeoff_checkpoint, "takeoff_latest.pt"),
+        (args.capture_validation, "capture_teacher_validation.json"),
+        (args.capture_demonstrations, "capture_demonstrations.npz"),
+    ]:
+        if source:
+            selected["artifacts/" + name] = source
     manifest = dict(
         source_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True

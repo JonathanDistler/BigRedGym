@@ -1,6 +1,7 @@
 """Compare trusted complete checkpoints after uninterrupted vs restarted simulation."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -67,6 +68,10 @@ def main():
             )
     result = dict(
         exact_resume=True,
+        checkpoint_kind=left["kind"],
+        reference_sha256=left["reference_sha256"],
+        left_sha256=hashlib.sha256(args.left.read_bytes()).hexdigest(),
+        right_sha256=hashlib.sha256(args.right.read_bytes()).hexdigest(),
         update=left["update"],
         checked="policy, optimizer, RNGs, normalization buffers, curriculum, reference",
         scope=(

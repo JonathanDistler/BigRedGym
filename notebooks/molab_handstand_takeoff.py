@@ -36,11 +36,12 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    # Go2 standing takeoff — bounded CPU pilot
+    # Go2 standing takeoff and capture — bounded CPU pilots
 
     Run sections in order. The learned actor is a **bounded feedback residual
     around an explicit nominal demonstration prior**, trained for 0.96 seconds.
-    It is not a controller for the complete handstand. A phase-prior-only
+    The original takeoff workflow ends at 0.96 s. The capture section below
+    validates longer prefixes and integrates live balance feedback. A prior-only
     ablation is included; takeoff retention alone does not prove PPO improvement.
 
     All simulation uses the original physics and strict gate. No physical robot
@@ -148,6 +149,7 @@ def _(os, source_root, subprocess):
         MPLBACKEND="Agg",
         UV_PYTHON="3.11",
         UV_PROJECT_ENVIRONMENT=str(source_root / ".venv"),
+        MPLCONFIGDIR=str(source_root / ".mpl-cache"),
     )
     project_python = source_root / ".venv/bin/python"
 
@@ -556,12 +558,20 @@ def _(download_button, hashlib, io, json, mo, source_root, tarfile):
         "output/molab_smoke",
         "output/molab_evaluation",
         "output/molab_benchmark",
+        "output/molab_capture_diagnostics",
+        "output/molab_capture_prefix",
+        "output/molab_capture_smoke",
+        "output/molab_capture_pilot",
+        "output/molab_capture_full",
+        "output/molab_capture_benchmark",
+        "output/molab_capture_bc",
     ]:
         _directory = source_root / _folder
         _paths.extend(
             p
             for p in _directory.glob("*")
-            if p.suffix == ".json" or p.name in ["latest.pt", "best.pt"]
+            if p.suffix in [".json", ".pdf", ".png", ".npz"]
+            or p.name in ["latest.pt", "best.pt"]
         )
     if not _paths:
         raise ValueError("No completed checkpoints/results available")
@@ -587,6 +597,336 @@ def _(download_button, hashlib, io, json, mo, source_root, tarfile):
             mo.md(
                 f"Archive SHA256: `{hashlib.sha256(_target.read_bytes()).hexdigest()}`"
             ),
+        ]
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Capture correction and longer prefix validation
+
+    The old takeoff actor clamps phase at 0.96 s; continuing it unchanged is not
+    a capture policy. The new actor covers 1.26/1.50/1.76/2.00/2.20 s, then uses
+    retained neural balance feedback. Inputs add estimated COM height/velocity
+    from an ideal 500 Hz IMU observer and known model geometry. No actual world
+    base position, velocity, COM or contact force enters the actor. Standing
+    height/zero velocity are calibrated; hardware frames, noise and bias are
+    unvalidated. Full success still requires the original five-second gate.
+
+    Run the exact reference regression first. Capture PPO starts fresh with the
+    new 47-channel architecture; it does not overwrite the old update-10 actor.
+    Larger capture updates require objective improvement, actual Molab throughput
+    and exact simulator resume evidence. Do not launch 250 by default.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    capture_checkpoint = mo.ui.text(
+        value="artifacts/capture_student.pt", label="Capture BC/PPO checkpoint"
+    )
+    capture_diagnostics_button = mo.ui.run_button(
+        label="Capture A: four-controller failure diagnostics"
+    )
+    capture_prefix_button = mo.ui.run_button(
+        label="Capture B: validate longer continuous prefixes"
+    )
+    capture_bc_button = mo.ui.run_button(
+        label="Optional: regenerate corrective capture BC"
+    )
+    capture_smoke_button = mo.ui.run_button(
+        label="Capture C: 2 updates, restart/resume, exact comparison"
+    )
+    capture_benchmark_button = mo.ui.run_button(
+        label="Capture D: measure this Molab runtime"
+    )
+    capture_pilot_button = mo.ui.run_button(
+        label="Capture E: optional bounded continuation"
+    )
+    capture_target = mo.ui.number(
+        start=4, stop=50, value=10, label="Cumulative capture updates; maximum 50"
+    )
+    capture_resume = mo.ui.text(
+        value="output/molab_capture_smoke/latest.pt", label="Capture resume checkpoint"
+    )
+    capture_full_button = mo.ui.run_button(
+        label="Capture F: held-out full-maneuver evaluation"
+    )
+    mo.vstack(
+        [
+            capture_checkpoint,
+            capture_diagnostics_button,
+            capture_prefix_button,
+            capture_bc_button,
+            capture_smoke_button,
+            capture_benchmark_button,
+            capture_target,
+            capture_resume,
+            capture_pilot_button,
+            capture_full_button,
+        ]
+    )
+    return (
+        capture_checkpoint,
+        capture_diagnostics_button,
+        capture_prefix_button,
+        capture_bc_button,
+        capture_smoke_button,
+        capture_benchmark_button,
+        capture_target,
+        capture_resume,
+        capture_pilot_button,
+        capture_full_button,
+    )
+
+
+@app.cell
+def _(capture_diagnostics_button, mo, project_run, source_root):
+    mo.stop(not capture_diagnostics_button.value)
+    if not (source_root / ".reference_regression.json").exists():
+        raise RuntimeError("Run the exact nominal regression first")
+    project_run(
+        [
+            "scripts/handstand_capture.py",
+            "compare",
+            "--checkpoint",
+            "artifacts/takeoff_latest.pt",
+            "--balance",
+            "artifacts/balance.pt",
+            "--feedback",
+            "artifacts/takeoff_teacher.npz",
+            "--trials",
+            "2",
+            "--output",
+            "output/molab_capture_diagnostics",
+        ]
+    )
+    project_run(
+        [
+            "scripts/plot_handstand_capture.py",
+            "--input",
+            "output/molab_capture_diagnostics",
+        ]
+    )
+    _image = (
+        source_root / "output/molab_capture_diagnostics/capture_comparison.png"
+    ).read_bytes()
+    mo.image(_image)
+    return
+
+
+@app.cell
+def _(capture_prefix_button, capture_checkpoint, mo, project_run):
+    mo.stop(not capture_prefix_button.value)
+    project_run(
+        [
+            "scripts/handstand_capture.py",
+            "prefix",
+            "--checkpoint",
+            capture_checkpoint.value,
+            "--baseline-checkpoint",
+            "artifacts/takeoff_latest.pt",
+            "--controllers",
+            "reference",
+            "prior",
+            "student",
+            "--balance",
+            "artifacts/balance.pt",
+            "--feedback",
+            "artifacts/takeoff_teacher.npz",
+            "--trials",
+            "4",
+            "--output",
+            "output/molab_capture_prefix",
+        ]
+    )
+    return
+
+
+@app.cell
+def _(capture_bc_button, mo, project_run):
+    mo.stop(not capture_bc_button.value)
+    project_run(
+        [
+            "scripts/handstand_capture.py",
+            "bc",
+            "--feedback",
+            "artifacts/takeoff_teacher.npz",
+            "--balance",
+            "artifacts/balance.pt",
+            "--demonstrations",
+            "12",
+            "--epochs",
+            "100",
+            "--trials",
+            "4",
+            "--seed",
+            "4110",
+            "--output",
+            "output/molab_capture_bc",
+        ]
+    )
+    return
+
+
+@app.cell
+def _(capture_smoke_button, capture_checkpoint, mo, project_run, source_root):
+    mo.stop(not capture_smoke_button.value)
+    if not (source_root / ".reference_regression.json").exists():
+        raise RuntimeError("Run the exact nominal regression first")
+    _common = ["--envs", "1", "--rollout-steps", "128", "--trials", "2"]
+    project_run(
+        [
+            "scripts/handstand_takeoff.py",
+            "train",
+            "--checkpoint",
+            capture_checkpoint.value,
+            "--updates",
+            "2",
+            *_common,
+            "--output",
+            "output/molab_capture_smoke",
+        ]
+    )
+    project_run(
+        [
+            "scripts/handstand_takeoff.py",
+            "train",
+            "--checkpoint",
+            "output/molab_capture_smoke/latest.pt",
+            "--resume",
+            "--updates",
+            "3",
+            *_common,
+            "--output",
+            "output/molab_capture_smoke",
+        ]
+    )
+    project_run(
+        [
+            "scripts/handstand_takeoff.py",
+            "train",
+            "--checkpoint",
+            capture_checkpoint.value,
+            "--updates",
+            "3",
+            *_common,
+            "--output",
+            "output/molab_capture_continuous",
+        ]
+    )
+    project_run(
+        [
+            "scripts/verify_handstand_checkpoint.py",
+            "--left",
+            "output/molab_capture_smoke/latest.pt",
+            "--right",
+            "output/molab_capture_continuous/latest.pt",
+            "--output",
+            "output/molab_capture_smoke/resume_verification.json",
+        ]
+    )
+    return
+
+
+@app.cell
+def _(capture_benchmark_button, mo, project_run, source_root):
+    mo.stop(not capture_benchmark_button.value)
+    if not (
+        source_root / "output/molab_capture_smoke/resume_verification.json"
+    ).exists():
+        raise RuntimeError("Complete the capture simulator resume check first")
+    project_run(
+        [
+            "scripts/handstand_takeoff.py",
+            "benchmark",
+            "--checkpoint",
+            "output/molab_capture_smoke/latest.pt",
+            "--env-counts",
+            "1",
+            "4",
+            "--lengths",
+            "128",
+            "--output",
+            "output/molab_capture_benchmark",
+        ]
+    )
+    return
+
+
+@app.cell
+def _(
+    capture_pilot_button,
+    capture_resume,
+    capture_target,
+    json,
+    mo,
+    project_run,
+    source_root,
+):
+    mo.stop(not capture_pilot_button.value)
+    if not (
+        source_root / "output/molab_capture_smoke/resume_verification.json"
+    ).exists():
+        raise RuntimeError("Capture resume verification is required")
+    if not (source_root / "output/molab_capture_benchmark/benchmark.json").exists():
+        raise RuntimeError("Measure actual Molab capture throughput first")
+    _history = json.loads(
+        (source_root / "output/molab_capture_smoke/curve.json").read_text()
+    )
+    if not all(r.get("ppo_healthy", False) for r in _history):
+        raise RuntimeError("Unhealthy capture PPO pilot: stop and diagnose")
+    project_run(
+        [
+            "scripts/handstand_takeoff.py",
+            "train",
+            "--checkpoint",
+            capture_resume.value,
+            "--resume",
+            "--updates",
+            str(int(capture_target.value)),
+            "--envs",
+            "1",
+            "--rollout-steps",
+            "128",
+            "--trials",
+            "2",
+            "--output",
+            "output/molab_capture_pilot",
+        ]
+    )
+    return
+
+
+@app.cell
+def _(capture_full_button, capture_checkpoint, mo, project_run):
+    mo.stop(not capture_full_button.value)
+    project_run(
+        [
+            "scripts/handstand_capture.py",
+            "full",
+            "--checkpoint",
+            capture_checkpoint.value,
+            "--baseline-checkpoint",
+            "artifacts/takeoff_latest.pt",
+            "--balance",
+            "artifacts/balance.pt",
+            "--feedback",
+            "artifacts/takeoff_teacher.npz",
+            "--controllers",
+            "reference",
+            "prior",
+            "hybrid",
+            "student",
+            "--evaluation-seed",
+            "401000",
+            "--trials",
+            "8",
+            "--output",
+            "output/molab_capture_full",
         ]
     )
     return

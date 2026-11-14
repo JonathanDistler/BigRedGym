@@ -1,0 +1,16 @@
+{
+  "status": "BLOCKED: replace with actual measured evidence; this is not a valid proof",
+  "runtime_location": "molab",
+  "paired_full_report": {
+    "path": "output/molab_capture_paired20/full.json",
+    "sha256": "REPLACE_WITH_ACTUAL_SHA256"
+  },
+  "molab_benchmark": {
+    "path": "output/molab_capture_benchmark/benchmark.json",
+    "sha256": "REPLACE_WITH_ACTUAL_SHA256"
+  },
+  "molab_resume_receipt": {
+    "path": "output/molab_capture_smoke/resume_verification.json",
+    "sha256": "REPLACE_WITH_ACTUAL_SHA256"
+  }
+}
