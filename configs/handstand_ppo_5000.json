@@ -1,0 +1,14 @@
+{
+  "status": "GATED: student has not demonstrated nominal strict success",
+  "seed": 4110,
+  "updates": 5000,
+  "envs": 16,
+  "execution": "serial complete episodes; environments do not remain resident",
+  "rollout_steps": 128,
+  "rollout_steps_meaning": "optimizer minibatch size; episodes are not truncated",
+  "eval_every": 10,
+  "patience": 5,
+  "milestones": [50, 250, 500, 1000, 2500, 5000],
+  "curriculum": "A only; advance B-E only after measured skill retention",
+  "candidate_configuration_benchmark": "NOT COMPLETED: functional student gate failed"
+}
