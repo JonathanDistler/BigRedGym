@@ -192,7 +192,9 @@ MuJoCo CPU is feasible; Warp/CUDA is not available. Licensed VSim was not evalua
 No assumption of GPU acceleration or 4096 environments is made. The measured
 native rollout benchmark includes strict 500 Hz scoring and Assignment 6 metrics;
 see `output/final_cpu_profile/benchmark.json`: 50.27 control transitions/s and
-737.1 MiB peak RSS for a 320-step successful rollout. Resource measurements are process
+737.1 MiB peak RSS for a 320-step successful rollout in the first benchmark;
+the final repeated profile measured 54.88 transitions/s at about 100% of one
+CPU core. Resource measurements are process
 peak RSS, not total WSL memory. Candidate worker counts and
 training throughput remain unmeasured because the functional student gate failed.
 At 50 transitions/s, 5000 updates with 16 complete 320-step episodes would
