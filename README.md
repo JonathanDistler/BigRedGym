@@ -119,3 +119,8 @@ for what the retained tests cover.
 
 # Note on AI-generated files
 Some of the code has been worked on by an AI agent, in the case where code segments have been heavily edited by AI, the AI-generated files in [genAI_skills](genAI_skills/) may be of some value in understanding the code, especially [README_MUJOCO.md](genAI_skills/README_MUJOCO.md).
+
+## Released handstand experiment
+
+See [handstand reproduction instructions](docs/handstand_reproduce.md) for the
+67/100 simulation controller, hash-verified release assets, and deployment audit.
