@@ -9,6 +9,7 @@ docs/validation/go2_handstand/adapter100.json
 docs/validation/go2_handstand/changed_files.txt
 docs/validation/go2_handstand/dry_run.json
 docs/validation/go2_handstand/matched_trials.json
+docs/validation/go2_handstand/nominal_sensors.npz
 docs/validation/go2_handstand/original100.json
 docs/validation/go2_handstand/pytest.xml
 docs/validation/go2_handstand/recorded_sensor_replay.json
