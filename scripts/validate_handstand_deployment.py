@@ -62,9 +62,41 @@ def main():
     )
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--trials", type=int, default=100)
+    ap.add_argument(
+        "--original-only",
+        action="store_true",
+        help="Run the unchanged research full_eval without unused teacher assets",
+    )
     args = ap.parse_args()
     torch.set_num_threads(1)
     policy, t = load_assets(args.checkpoint, args.reference)
+    if args.original_only:
+        from scripts.handstand_capture import full_eval
+        import hashlib
+
+        args.controllers = ["student"]
+        args.evaluation_seed = 301000
+        args.output.mkdir(parents=True, exist_ok=True)
+        started = time.perf_counter()
+        result = full_eval(args, t)
+        report = {
+            "result": result,
+            "seconds": time.perf_counter() - started,
+            "provenance": {
+                "checkpoint_sha256": hashlib.sha256(
+                    args.checkpoint.read_bytes()
+                ).hexdigest(),
+                "reference_sha256": hashlib.sha256(
+                    args.reference.read_bytes()
+                ).hexdigest(),
+                "note": (
+                    "Unmodified research full_eval; "
+                    "unused teacher assets are not required."
+                ),
+            },
+        }
+        (args.output / "full.json").write_text(json.dumps(report, indent=2) + "\n")
+        return
     original = load(args.checkpoint)[0].eval()
     scripted = torch.jit.script(policy)
     errors = dict(

@@ -48,18 +48,23 @@ export GO2_HANDSTAND_SHA256=21d2c7ca8a9b55b27d1a58d4cc7fae17fdbea2dbedee8ecbacd5
   tests/unit_tests/test_handstand_capture.py tests/unit_tests/test_handstand_deployment.py -q
 "$PY" scripts/export_handstand_deployment.py --output output/new_review_bundle
 "$PY" -c 'from go2_deploy.handstand.bundle import load_review_bundle; p,m,c=load_review_bundle("output/new_review_bundle"); print(c["status"])'
+"$PY" scripts/validate_handstand_deployment.py --original-only --trials 100 --output output/original100
 "$PY" scripts/validate_handstand_deployment.py --trials 100 --output output/adapter100
+"$PY" scripts/report_handstand_deployment.py --original output/original100/full.json \
+  --adapter output/adapter100/regression.json --output output/matched_trials.json
+"$PY" scripts/dry_run_handstand_deployment.py \
+  --recording output/adapter100/nominal_imu.npz --output output/dry_run.json
 "$PY" scripts/measure_handstand_sensor_drift.py output/sensor_drift.json
 "$PY" scripts/replay_handstand_sensor_noise.py \
   --recording output/adapter100/nominal_imu.npz --output output/sensor_replay.json
 ```
 
-For the original baseline, use the exact command in `handstand_reproduce.md`
-with `--checkpoint artifacts/handstand_deployment/capture_checkpoint.pt`.
-That legacy CLI also hashes unused balance/feedback teachers; obtain those
-from the reference release bundle as documented there, and pass their paths
-with `--balance` and `--feedback`. These teachers are not needed for selected
-controller inference or the new adapter regression.
+The `--original-only` command calls the unchanged research `full_eval` with the
+same seeds, perturbations, horizon and scorer. It avoids hashing unused teacher
+assets in the legacy CLI. The committed original baseline evidence was generated
+with that original CLI, documented in `handstand_reproduce.md`, before adapter
+evaluation. No balance/takeoff teachers are needed for the self-contained commands
+above or for selected-controller inference.
 
 Exports refuse to overwrite an existing output directory. `load_assets` validates
 the immutable checkpoint/reference hashes before unpickling the trusted checkpoint,
@@ -212,7 +217,7 @@ noise results are input-distribution effects, not code-parity failures.
 | Joint mapping round trip, units, normalization and slew tests | PASS |
 | Stale/invalid sensors, corrupt/missing assets, wrong metadata/order rejection | PASS |
 | Offline activation/reset/cancel and applied-target acknowledgement | PASS |
-| Original/adapter full matched simulation regression | See measured report |
+| Original/adapter full matched simulation regression | PASS: 67/100 each, nominal each |
 | 50 Hz/EMA semantics through unchanged Cornell runner | FAIL |
 | Lossless synchronized 500 Hz physical telemetry | NOT EVALUATED / blocked |
 | Physical effort/overspeed equivalence through supported interface | FAIL |
@@ -223,3 +228,9 @@ noise results are input-distribution effects, not code-parity failures.
 | Overall hardware readiness | **NOT READY** |
 
 No software test or simulated success authorizes a physical attempt.
+
+The tested runtime was Linux x86_64 under WSL2, NumPy 2.4.6 and the checked-in
+lockfile. Inference and software-cycle timings are host measurements. They do
+not establish scheduler deadlines on the deployment computer. Cold TorchScript
+startup can exceed the 20 ms budget; `load_review_bundle` performs warm-up before
+activation. Stock Cornell loading needs the same explicit pre-activation warm-up.

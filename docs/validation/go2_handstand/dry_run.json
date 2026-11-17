@@ -1,0 +1,20 @@
+{
+  "status": "SOFTWARE DRY RUN ONLY; NOT HARDWARE AUTHORIZATION",
+  "commands": 320,
+  "imu_samples_consumed": 3190,
+  "expected_imu_samples": 3190,
+  "trailing_samples_after_last_snapshot": 10,
+  "maximum_absolute_errors": {
+    "observation": 4.547473508864641e-13,
+    "target": 0.0,
+    "previous_applied_target": 0.0
+  },
+  "full_software_cycle_ms": {
+    "median": 0.9553575,
+    "p99": 2.03232193,
+    "max": 2.346758
+  },
+  "cycles_over_20ms": 0,
+  "cancelled": true,
+  "limitations": "Replay scheduling is not a real-time deadline test. Physical actuator protections, transport, hardware clock synchronization and recovery are not evaluated."
+}

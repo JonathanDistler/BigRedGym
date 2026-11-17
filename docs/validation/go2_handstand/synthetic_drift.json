@@ -1,0 +1,83 @@
+{
+  "seed": 4110,
+  "scope": "Synthetic root observer sensitivity, not a calibrated hardware error distribution. 0.08 m/s2 noise, [0.02,-0.01,0.03] m/s2 bias, 10ms signal latency, \u00b10.2ms timestamp jitter, 2cm height/0.5deg orientation initialization error. Exact reported timestamps used.",
+  "results": {
+    "ideal": {
+      "duration_s": 7.999999999999341,
+      "max_root_height_error_m": 1.2212453270876722e-15,
+      "max_root_velocity_error_m_s": 6.998295538289843e-15,
+      "final_root_height_error_m": 9.43689570931383e-16,
+      "final_root_velocity_error_m_s": [
+        1.6191034786784213e-16,
+        0.0,
+        1.0533024105696676e-16
+      ]
+    },
+    "noise": {
+      "duration_s": 7.999999999999341,
+      "max_root_height_error_m": 0.0363743851763797,
+      "max_root_velocity_error_m_s": 0.029299010562027373,
+      "final_root_height_error_m": -0.0363743851763797,
+      "final_root_velocity_error_m_s": [
+        6.377173069234621e-05,
+        -0.01999779386916035,
+        -0.016832301637056582
+      ]
+    },
+    "bias": {
+      "duration_s": 7.999999999999341,
+      "max_root_height_error_m": 0.9602399999998252,
+      "max_root_velocity_error_m_s": 0.29933259094188563,
+      "final_root_height_error_m": 0.9602399999998252,
+      "final_root_velocity_error_m_s": [
+        0.15999999999998665,
+        -0.07999999999999101,
+        0.23999999999997493
+      ]
+    },
+    "latency": {
+      "duration_s": 7.999999999999341,
+      "max_root_height_error_m": 0.007996210660375647,
+      "max_root_velocity_error_m_s": 0.0023501543169453087,
+      "final_root_height_error_m": 0.007996210660375647,
+      "final_root_velocity_error_m_s": [
+        8.534629185693173e-15,
+        0.0,
+        8.413408858487514e-17
+      ]
+    },
+    "jitter": {
+      "duration_s": 7.9963970224152225,
+      "max_root_height_error_m": 1.9984014443252818e-15,
+      "max_root_velocity_error_m_s": 3.500024187063885e-15,
+      "final_root_height_error_m": -9.43689570931383e-16,
+      "final_root_velocity_error_m_s": [
+        -2.844248545453426e-15,
+        0.0,
+        7.884860299400831e-16
+      ]
+    },
+    "initialization": {
+      "duration_s": 7.999999999999341,
+      "max_root_height_error_m": 0.019999998402905117,
+      "max_root_velocity_error_m_s": 0.6848650253337655,
+      "final_root_height_error_m": 0.005821765714217775,
+      "final_root_velocity_error_m_s": [
+        0.6848585059123301,
+        0.0,
+        -0.002988277923843977
+      ]
+    },
+    "combined": {
+      "duration_s": 8.00742691193565,
+      "max_root_height_error_m": 0.8960353245613961,
+      "max_root_velocity_error_m_s": 0.8661237390036239,
+      "final_root_height_error_m": 0.8960353245613961,
+      "final_root_velocity_error_m_s": [
+        0.8345986266799177,
+        -0.07698828791477565,
+        0.21837643447397137
+      ]
+    }
+  }
+}
