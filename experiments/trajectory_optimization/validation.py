@@ -1,5 +1,6 @@
 """Independent physical replay and fail-closed export of optimization candidates."""
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -26,6 +27,7 @@ def audit_saved(directory):
     rows = problem.unpack(saved["decision"])
     # Do not trust duplicated arrays in an archive independently of decisions.
     for name, expected in [
+        ("time", settings.times),
         ("qpos", np.array([robot.pose(row[Y]) for row in rows])),
         ("qvel", rows[:, V]),
         ("targets", np.array([problem.target(row) for row in rows])),
@@ -36,6 +38,16 @@ def audit_saved(directory):
             raise ValueError("Archive/decision mismatch: " + name)
     actual = problem.audit(saved["decision"])
     return robot, problem, saved, actual
+
+
+def strict_contact_audit(problem, decision):
+    """Recheck coarse-mesh experiments against the original contact criteria."""
+    cfg = replace(problem.cfg, contact_acceleration=True, foot_velocity_tolerance=0.002)
+    robot = Robot(cfg)
+    strict = Problem(
+        robot, problem.start, problem.goal, problem.anchors, problem.nominal
+    )
+    return strict.audit(decision)
 
 
 def position_commands(saved, speed, hold_seconds):
@@ -246,6 +258,9 @@ def export(directory, destination):
     directory = Path(directory)
     destination = Path(destination)
     robot, problem, saved, mesh = audit_saved(directory)
+    strict = strict_contact_audit(problem, saved["decision"])
+    if not strict["mesh_feasible"]:
+        raise ValueError("NOT READY: original strict contact audit must pass")
     proof = replay(directory)  # Recompute; never trust a success flag in JSON.
     digest = hashlib.sha256((directory / "candidate.npz").read_bytes()).hexdigest()
     if (

@@ -341,3 +341,111 @@ The measured candidate failures do not establish global task infeasibility. The 
 - Original scorer/model reference: `gym/envs/go2/handstand_replay.py` at the unchanged research baseline.
 
 These sources motivate the mathematical setup; actual outcomes are measured locally and should not be inferred from the existence of the equations. **Nothing in this report authorizes a physical handstand attempt.**
+
+## 19. Warm start and contact/mesh refinement follow-up
+
+This implementation extends the first experiment on the same isolated branch. It changes initialization and numerical methods; the trajectory task objective remains identically zero. No policy training, checkpoint replacement or physical connection is involved.
+
+### 19.1 Constrained inverse-dynamics initialization
+
+The old kinematic initializer projects velocities and accelerations onto stance constraints separately. That destroys the finite-difference relationships that originally connected neighboring states. Rather than treating that projection as a dynamically valid path, `warm_start.inverse_dynamics_seed` holds each kinematic configuration and velocity fixed and solves a small constrained inverse-dynamics problem for acceleration, actuator torque and active contact force:
+
+\[
+z_k=(a_k,\tau_k,f_{k,\mathrm{stance}}),\qquad
+\min_{z_k}\frac12\|D_k^{-1}(z_k-z_k^{\mathrm{kin}})\|_2^2.
+\]
+
+This is an **initialization merit**, not a task reward or a preference in the trajectory feasibility problem. Its exact linear equalities are
+
+\[
+[\,M\;-S^T\;-J_c^T\,]z=-h,
+\qquad J_c a=-\dot J_c v
+\]
+
+with the second equality included only when acceleration-level stance constraints are enabled. Force and torque bounds remain active. The terminal acceleration is fixed to zero. Eight friction half-planes impose
+
+\[
+\cos\theta_j f_x+\sin\theta_j f_y
+\le\mu\cos(\pi/8)f_z,\quad \theta_j=j\pi/4.
+\]
+
+This polygon lies **inside** the circular Coulomb cone. The independent audit still checks the circular cone. A node is accepted only after explicit equality/cone residual checks, rather than trusting the QP termination flag. Failed nodes retain their previous seed and are listed in the report. Nodewise dynamics repair does not imply that the resulting acceleration integrates to the specified next velocity.
+
+### 19.2 Contact schedule and nonuniform mesh
+
+Settings now store explicit, strictly increasing node times, including the rear-foot release time exactly. Every Euler defect and target-slew limit uses its own interval length \(h_k=t_{k+1}-t_k\). The contact-aware initial mesh concentrates nodes on both sides of support transfer. Rear-foot swing interpolation uses elapsed physical time, not node index. The release fraction is configurable; this remains a prescribed mode sequence, not a contact-complementarity solver.
+
+For adaptive refinement, each interval is scored by its largest scaled position/velocity Euler defect. `--refine-worst n` bisects the worst \(n\) intervals and transfers the previous candidate. Orientations interpolate on the configuration manifold with `mj_differentiatePos` and `mj_integratePos`. Applied-force entries for newly inactive feet are zeroed, and fixed endpoint/initial-rest conditions are restored. This targets **NLP defects**, not a certified continuous-time discretization error. Native replay and further mesh-convergence evidence remain necessary.
+
+### 19.3 Deliberately relaxed auxiliary contact constraints
+
+The baseline remains available unchanged by default. Experimental `--discrete-contact` removes the intermediate equality \(J_c a+\dot J_c v=0\), while retaining the stance ground-gap equality, velocity bound and anchor-drift bound. Enforcing position-, velocity- and acceleration-level contact simultaneously with finite-step explicit Euler can overconstrain a coarse nonlinear mesh. This is a modeling relaxation, not evidence that a moving foot is stationary.
+
+The measured exploratory runs use a stance velocity tolerance of **0.02 m/s per component**, instead of the original 0.002 m/s. No collision clearance, nonpenetration, friction, joint limit, speed-dependent torque, command bound or slew protection is removed. The coarser velocity tolerance is a continuation aid. Export independently re-audits **acceleration-level stance and the original 0.002 m/s tolerance**, so a relaxed candidate cannot silently become a strict deployment asset.
+
+### 19.4 Feasibility restoration and exact dynamics elimination
+
+`--solver restoration` uses bounded sparse least squares on the numerical feasibility merit
+
+\[
+\Phi(x)=\tfrac12\|\widetilde c_{eq}(x)\|_2^2+
+\tfrac12\|\min(\widetilde c_{ineq}(x),0)\|_2^2.
+\]
+
+This explicitly penalizes **constraint residuals in the solver algorithm**. It does not introduce a task reward, tracking reward, energy cost or preference among feasible handstands. Only the independent tight audit can declare mesh feasibility; an `xtol` termination message cannot.
+
+The optional `--eliminate-dynamics` variant derives
+
+\[
+a_k=M(q_k)^{-1}\left(S^T\tau_k+J(q_k)^Tf_k-h(q_k,v_k)\right)
+\]
+
+at every residual evaluation, removing acceleration from the free variables. Dynamics are then satisfied to linear-solve precision. Terminal acceleration zero and all acceleration bounds are explicit restoration residuals and independently audited. This prevents the merit solver from trading a dynamics violation against a smaller integration violation. It is currently supported only by the restoration solver.
+
+### 19.5 Reproduce the refinement experiments
+
+Use the environment/reference requirements in Section 16. Choose fresh output paths. Solver time budgets are soft callback budgets, not hard deadlines.
+
+```bash
+python scripts/optimize_go2_trajectory.py \
+  --contact-mesh --discrete-contact --inverse-dynamics \
+  --stance-velocity 0.02 --intervals 16 --solver restoration \
+  --iterations 80 --max-seconds 180 --output output/refine16_NEW
+
+python scripts/optimize_go2_trajectory.py \
+  --from-candidate output/refine16_NEW --refine-worst 6 \
+  --discrete-contact --stance-velocity 0.02 --solver restoration \
+  --iterations 100 --max-seconds 180 --output output/adaptive22_NEW
+
+python scripts/optimize_go2_trajectory.py \
+  --from-candidate output/refine16_NEW --intervals 16 --contact-mesh \
+  --discrete-contact --stance-velocity 0.02 --solver restoration \
+  --eliminate-dynamics --iterations 60 --max-seconds 180 \
+  --output output/exact_dynamics16_NEW
+
+python scripts/validate_go2_trajectory.py --candidate output/refine16_NEW
+```
+
+To restore strict stance constraints during a subsequent solve, omit `--discrete-contact` and use `--stance-velocity 0.002`. Do not lower acceptance standards to turn a solver termination flag into a successful trajectory. The staff runtime file is unchanged by this refinement work and physical activation remains disabled.
+
+### 19.6 Measured follow-up outcome
+
+The combined regression run has **58 passed, zero failed, zero skipped** tests (the new optimization/runtime suites plus the original replay/robustness/takeoff/capture suites). Ruff lint, formatting and Git whitespace checks pass. New checks exercise exact release inclusion, nonuniform Euler intervals, inverse-dynamics repair without state corruption, manifold mesh transfer, largest-defect bisection, and dynamics elimination.
+
+| Trial | Intervals | Max scaled equality error | Max scaled inequality error | Outcome |
+| --- | ---: | ---: | ---: | --- |
+| Previous experiment, Section 17 | 24 | 4.294180 | 0.565711 | Failed |
+| Contact-aware restoration v1 | 12 | 0.128022 | 0.023905 | Failed, 45 residual evaluations / 24 accepted steps / 98.64 s |
+| Time-corrected restoration v2 | 16 | 0.104059 | 0.012860 | Failed, 48 residual evaluations / 28 accepted steps / 162.97 s |
+| Residual-based bisection of v1 | 18 | 0.109216 | 0.018566 | Failed, 30 residual evaluations / 18 accepted steps / 127.76 s |
+| Exact-dynamics elimination from v1 | 12 | 0.272710 | 0.030000 | Failed, 39 residual evaluations / 28 accepted steps / 120.01 s |
+
+The times above are the last accepted-step callback times, not certified total wall-clock durations. Every restoration solve terminated by step-size tolerance; **solver termination success did not mean constraint feasibility**. The early scratch report field `iterations` counted residual evaluations for restoration; current code records accepted steps and function evaluations separately. The first v1 solve preceded the correction from node-index rear swing interpolation to physical-time interpolation; v2 and subsequent source use physical time.
+
+The constrained inverse-dynamics seed reduces the dynamics residual to 2.09e-9 in raw generalized-force rows, but has a maximum scaled Euler-velocity defect of 15.6064. It is therefore only a nodewise initialization improvement. The exact-dynamics solve has a raw manipulator residual of 1.42e-14, but retains a 0.272710 generalized-velocity defect, 4.28641 N friction-cone deficit and 3 mm self-clearance deficit. Temporal/contact consistency remains unresolved.
+
+The best restoration trial by equality error (v2) has raw dynamics residual 16.6153 in mixed N/Nm rows, Euler position defect 0.00151858 in mixed tangent units, Euler velocity defect 0.0566019 in mixed velocity units, and command-joint-limit violation 0.0128602 rad. Its **strict original-contact audit** gives maximum scaled equality / inequality violations 0.287382 / 9.005072. These must not be presented as strict-contact numerical parity.
+
+Native PD replay of v1 detects rear-calf contact at **1.078 s**. Replay of v2 detects rear-calf contact at **1.400 s**, achieves **zero seconds** continuous terminal hold, and records joint/root-position/root-orientation tracking errors 0.593720 rad / 0.372703 m / 0.848593 rad. The exact-dynamics variant also fails native replay, with front-calf contact at **1.070 s** and zero terminal hold. The v2 export test rejects the candidate at the original strict-contact audit and creates no output asset directory. Lower mesh residuals have not yet yielded successful native dynamics.
+
+All scratch artifacts remain ignored under `output/trajectory_*`. No candidate is accepted or offered for physical deployment. The smallest useful next investigation is the floating-base dynamics residual by interval and release timing, followed by an integration-consistent state/control warm start and a finer-mesh native-contact study. Blindly increasing node count did not improve this experiment. Collision or actuator constraints must not be dropped to disguise the failure.

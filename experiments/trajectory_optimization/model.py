@@ -23,6 +23,8 @@ REFERENCE_SHA = "21d2c7ca8a9b55b27d1a58d4cc7fae17fdbea2dbedee8ecbacd56cc324e9bb9
 class Settings:
     intervals: int = 12
     duration: float = 2.4
+    mesh_times: tuple = ()
+    contact_acceleration: bool = True
     release_fraction: float = 0.30
     friction: float = 0.6
     crouch_height: float = 0.27
@@ -40,7 +42,9 @@ class Settings:
     inequality_tolerance: float = 1e-6
 
     def __post_init__(self):
-        values = [v for v in self.__dict__.values() if not isinstance(v, bool)]
+        values = [
+            v for v in self.__dict__.values() if not isinstance(v, (bool, tuple, list))
+        ]
         if not np.isfinite(values).all() or self.intervals < 2 or self.duration <= 0:
             raise ValueError("Invalid finite mesh/duration")
         if not (0 < self.release_fraction < 1) or self.friction <= 0:
@@ -63,6 +67,28 @@ class Settings:
         ):
             raise ValueError("Constraint margins must be positive")
 
+        if self.mesh_times:
+            t = np.asarray(self.mesh_times, dtype=float)
+            if (
+                t.shape != (self.intervals + 1,)
+                or not np.isfinite(t).all()
+                or t[0] != 0
+                or abs(t[-1] - self.duration) > 1e-12
+                or np.any(np.diff(t) <= 0)
+            ):
+                raise ValueError("Mesh must increase strictly from zero to duration")
+
+    @property
+    def times(self):
+        return (
+            np.asarray(self.mesh_times)
+            if self.mesh_times
+            else np.linspace(0, self.duration, self.intervals + 1)
+        )
+
+    def step(self, k):
+        return float(self.times[k + 1] - self.times[k])
+
     @property
     def dt(self):
         return self.duration / self.intervals
@@ -72,8 +98,8 @@ class Settings:
             [
                 True,
                 True,
-                k < self.intervals * self.release_fraction,
-                k < self.intervals * self.release_fraction,
+                self.times[k] < self.duration * self.release_fraction,
+                self.times[k] < self.duration * self.release_fraction,
             ]
         )
 

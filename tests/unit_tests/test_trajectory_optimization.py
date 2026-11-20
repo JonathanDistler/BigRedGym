@@ -251,3 +251,107 @@ def test_resampling_and_slew_match_shared_command_path():
     np.testing.assert_allclose(targets[:3, 0], [0, 0.05, 0.1], atol=1e-15)
     assert (abs(np.diff(targets, axis=0)) <= 0.7 * speed * 0.02 + 1e-15).all()
     assert np.allclose(np.diff(times), 0.02)
+
+
+def test_contact_refined_mesh_and_validation():
+    from experiments.trajectory_optimization.warm_start import contact_mesh
+
+    times = contact_mesh(12, 2.4, 0.3)
+    cfg = Settings(intervals=12, duration=2.4, mesh_times=times)
+    assert len(times) == 13
+    assert np.all(np.diff(times) > 0)
+    release = np.flatnonzero(np.isclose(times, 0.72))[0]
+    assert cfg.contacts(release - 1).all()
+    np.testing.assert_array_equal(cfg.contacts(release), [True, True, False, False])
+    assert sum(cfg.step(k) for k in range(12)) == pytest.approx(2.4)
+    with pytest.raises(ValueError, match="Mesh"):
+        Settings(intervals=2, mesh_times=(0, 0, 2.4))
+
+
+def test_inverse_dynamics_repairs_without_corrupting_state(static_problem):
+    from experiments.trajectory_optimization.warm_start import inverse_dynamics_seed
+
+    p = static_problem
+    original = p.seed(static=True).reshape(-1, WIDTH)
+    original[:, TAU] = 0
+    original[:, FORCE] = 0
+    repaired, report = inverse_dynamics_seed(p, original.ravel())
+    assert all(n["accepted"] for n in report), report
+    repaired = repaired.reshape(-1, WIDTH)
+    np.testing.assert_array_equal(repaired[:, Y], original[:, Y])
+    np.testing.assert_array_equal(repaired[:, V], original[:, V])
+    audit = p.audit(repaired.ravel())
+    assert audit["groups"]["manipulator_dynamics"]["maximum_raw_violation"] < 1e-6
+    assert audit["groups"]["friction_cone"]["maximum_raw_violation"] < 1e-7
+    assert audit["groups"]["velocity_dependent_torque"]["maximum_raw_violation"] < 1e-7
+    # Nodewise repair is not a temporal-feasibility certificate.
+
+
+def test_prolongation_and_nonuniform_euler(static_problem):
+    from experiments.trajectory_optimization.warm_start import prolong
+
+    p = static_problem
+    cfg = StaticSettings(
+        intervals=4, duration=0.04, mesh_times=(0, 0.003, 0.01, 0.025, 0.04)
+    )
+    r = Robot(cfg)
+    fine = Problem(r, p.start, p.goal, p.anchors, p.nominal)
+    x = prolong(p, p.seed(static=True), fine)
+    assert fine.audit(x)["mesh_feasible"]
+    rows = fine.unpack(x).copy()
+    rows[2, A][0] = 2
+    blocks = fine.blocks(rows.ravel())
+    velocity_defect = [
+        v for _, n, v, _, d in blocks if n == "explicit_euler_velocity" and d == (2, 3)
+    ][0]
+    assert velocity_defect[0] == pytest.approx(-0.03)
+
+
+def test_discrete_contact_only_removes_acceleration(endpoints):
+    r0, (start, _, anchors, nominal) = endpoints
+    r = Robot(StaticSettings(intervals=2, duration=0.04, contact_acceleration=False))
+    p = Problem(r, start, start, anchors, nominal)
+    names = {b[1] for b in p.blocks(p.seed(static=True))}
+    assert "stance_zero_acceleration" not in names
+    assert {
+        "stance_ground_gap",
+        "stance_velocity",
+        "stance_drift",
+        "friction_cone",
+        "native_self_clearance",
+        "velocity_dependent_torque",
+    } <= names
+
+
+def test_refinement_splits_largest_defect(static_problem):
+    from experiments.trajectory_optimization.warm_start import refine_defects
+
+    p = static_problem
+    rows = p.unpack(p.seed(static=True)).copy()
+    rows[1, A][0] = 10
+    mesh, report = refine_defects(p, rows.ravel(), 1)
+    assert report["split_intervals"] == [1]
+    np.testing.assert_allclose(mesh, [0, 0.02, 0.03, 0.04])
+    with pytest.raises(ValueError):
+        refine_defects(p, rows.ravel(), 0)
+
+
+def test_restoration_exact_dynamics_and_audit(static_problem):
+    from scripts.optimize_go2_trajectory import solve
+
+    p = static_problem
+    initial = p.seed(static=True)
+    result, _ = solve(
+        p,
+        initial,
+        max_iterations=1,
+        max_seconds=10,
+        method="restoration",
+        eliminate_dynamics=True,
+    )
+    audit = p.audit(result.x)
+    assert audit["groups"]["manipulator_dynamics"]["maximum_raw_violation"] < 1e-9
+    assert audit["maximum_bound_violation"] < 1e-9
+    assert audit["objective"] == 0
+    with pytest.raises(ValueError, match="restoration"):
+        solve(p, initial, max_iterations=1, eliminate_dynamics=True)

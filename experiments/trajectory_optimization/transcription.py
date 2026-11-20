@@ -70,20 +70,24 @@ class Problem:
 
     def seed(self, static=False):
         r = self.robot
-        dt = self.cfg.dt
+        times = self.cfg.times
         rows = np.zeros((self.nodes, WIDTH))
         start = r.chart(self.start)
         goal = start if static else r.chart(self.goal)
-        t = np.linspace(0, 1, self.nodes)
+        t = times / self.cfg.duration
         blend = 3 * t * t - 2 * t * t * t
         blend[1] = 0
         blend[-2] = 1
         rows[:, Y] = start + (goal - start) * blend[:, None]
         for k in range(self.nodes - 1):
             mujoco.mj_differentiatePos(
-                r.m, rows[k, V], dt, r.pose(rows[k, Y]), r.pose(rows[k + 1, Y])
+                r.m,
+                rows[k, V],
+                self.cfg.step(k),
+                r.pose(rows[k, Y]),
+                r.pose(rows[k + 1, Y]),
             )
-        rows[:-1, A] = np.diff(rows[:, V], axis=0) / dt
+        rows[:-1, A] = np.diff(rows[:, V], axis=0) / np.diff(times)[:, None]
         for k, row in enumerate(rows):
             q = r.pose(row[Y])
             M, h, p, J, *_ = r.terms(q, row[V])
@@ -109,12 +113,12 @@ class Problem:
         from scipy.optimize import least_squares
 
         r = self.robot
-        dt = self.cfg.dt
+        times = self.cfg.times
         rows = self.seed().reshape(self.nodes, WIDTH)
         r.set(self.goal)
         goal_feet, _ = r.foot_kinematics()
         last_joints = self.start[r.qids].copy()
-        first_swing = int(np.ceil(self.cfg.intervals * self.cfg.release_fraction))
+        release_time = self.cfg.duration * self.cfg.release_fraction
         for k, row in enumerate(rows):
             if k in (0, 1):
                 row[Y] = r.chart(self.start)
@@ -122,8 +126,8 @@ class Problem:
                 row[Y] = r.chart(self.goal)
             q = r.pose(row[Y])
             desired = self.anchors.copy()
-            if k >= first_swing:
-                phase = (k - first_swing) / max(1, self.nodes - 1 - first_swing)
+            if times[k] >= release_time:
+                phase = (times[k] - release_time) / (self.cfg.duration - release_time)
                 phase = phase * phase * (3 - 2 * phase)
                 desired[2:] = (1 - phase) * self.anchors[2:] + phase * goal_feet[2:]
                 desired[2:, 2] += 0.08 * np.sin(np.pi * phase)
@@ -155,7 +159,7 @@ class Problem:
         for k in range(self.nodes - 1):
             q = r.pose(rows[k, Y])
             qn = r.pose(rows[k + 1, Y])
-            mujoco.mj_differentiatePos(r.m, rows[k, V], dt, q, qn)
+            mujoco.mj_differentiatePos(r.m, rows[k, V], self.cfg.step(k), q, qn)
         rows[0, V] = 0
         for k, row in enumerate(rows):
             q = r.pose(row[Y])
@@ -165,7 +169,7 @@ class Problem:
             row[V][6:] += np.linalg.lstsq(active[:, 6:], -active @ row[V], rcond=None)[
                 0
             ]
-        rows[:-1, A] = np.diff(rows[:, V], axis=0) / dt
+        rows[:-1, A] = np.diff(rows[:, V], axis=0) / np.diff(times)[:, None]
         for k, row in enumerate(rows):
             q = r.pose(row[Y])
             M, h, p, J, *_ = r.terms(q, row[V])
@@ -245,7 +249,7 @@ class Problem:
                 if contact[i]:
                     if not solver or k not in (0, 1, self.nodes - 1):
                         add("eq", "stance_ground_gap", p[i, 2], 0.1, [k])
-                    if not solver or k != self.nodes - 1:
+                    if c.contact_acceleration and (not solver or k != self.nodes - 1):
                         add("eq", "stance_zero_acceleration", fa[i], 9.81, [k])
                     # Numerical drift guard in addition to zero acceleration.
                     add(
@@ -330,7 +334,7 @@ class Problem:
             if k < self.nodes - 1:
                 nxt = rows[k + 1]
                 predicted = q.copy()
-                mujoco.mj_integratePos(r.m, predicted, v, c.dt)
+                mujoco.mj_integratePos(r.m, predicted, v, c.step(k))
                 position_error = np.empty(18)
                 mujoco.mj_differentiatePos(
                     r.m, position_error, 1, predicted, r.pose(nxt[Y])
@@ -342,11 +346,11 @@ class Problem:
                 add(
                     "eq",
                     "explicit_euler_velocity",
-                    nxt[V] - v - c.dt * a,
+                    nxt[V] - v - c.step(k) * a,
                     1,
                     [k, k + 1],
                 )
-                slew = 0.7 * r.speed * c.dt
+                slew = 0.7 * r.speed * c.step(k)
                 delta = self.target(nxt) - target
                 add(
                     "ineq",
