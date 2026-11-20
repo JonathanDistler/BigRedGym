@@ -1,0 +1,3 @@
+# Additional offline optimizer dependency; install after the project lockfile.
+# The Cornell runtime file itself only needs the existing NumPy/Torch packages.
+scipy==1.16.3
