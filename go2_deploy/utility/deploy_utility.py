@@ -1,6 +1,5 @@
 import torch
 from gym.utils.torch_quat import quat_rotate_inverse
-from go2_deploy.deploy_config import DeployConfig
 from go2_deploy.utility.import_custom_impl import custom_impl
 
 # Unitree motor order: Front Right hip (haa), FR thigh (hfe), FR calf (kfe),
@@ -11,6 +10,7 @@ QGYM_TO_UNITREE_JOINT_IDX = torch.tensor([3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8])
 
 
 # Compute pieces of the observation vector, returning torch tensors
+
 
 def _get_obs_base_ang_vel(main_controller, lowstate_msg):
     return torch.tensor(lowstate_msg.imu_state.gyroscope)
@@ -111,6 +111,11 @@ def target_pos_to_action(main_controller, target_pos):
 # Adds the static default posture and maps targets to Unitree motor order.
 def action_to_lowcmd(main_controller, action_qgym_convention, kp_mult=1.0, kd_mult=1.0):
     target_pos_qgym = action_to_target_pos(main_controller, action_qgym_convention)
+    bound = getattr(custom_impl, "bound_command", None)
+    if bound is not None:
+        target_pos_qgym = bound(
+            main_controller, action_qgym_convention, kp_mult=kp_mult, kd_mult=kd_mult
+        )
     target_pos = target_pos_qgym[QGYM_TO_UNITREE_JOINT_IDX]
 
     lowcmd = main_controller.default_lowcmd

@@ -110,6 +110,9 @@ def config_from_meta(meta):
             raise KeyError(f"bundle has no scaling for '{key}'")
     cfg.DeployScaling = type("DeployScaling", (), dict(scaling))
 
+    # Optional per-bundle timing. Old bundles keep their current defaults.
+    cfg.ctrl_freq = meta.get("ctrl_freq", cfg.ctrl_freq)
+    cfg.exp_moving_avg = meta.get("exp_moving_avg", cfg.exp_moving_avg)
     cfg.bundle_meta = meta
     cfg.validate()
     return cfg
@@ -124,7 +127,15 @@ def load_bundle(bundle_dir):
     if _sha256(policy_path) != meta["policy_sha256"]:
         raise ValueError(f"{policy_path} does not match the hash in {META_FILE}")
 
+    from go2_deploy.utility.import_custom_impl import custom_impl
+
+    selected = meta.get("custom_implementation")
+    if selected is not None and os.path.basename(custom_impl.__file__) != selected:
+        raise ValueError(
+            f"Select GO2_CUSTOM_IMPLEMENTATION={selected} before loading this bundle"
+        )
     cfg = config_from_meta(meta)
+    cfg.bundle_dir = os.path.abspath(bundle_dir)
     if cfg.obs_dim() != meta["num_obs"]:
         raise ValueError(
             f"obs_vector adds up to {cfg.obs_dim()} values, "
@@ -137,4 +148,8 @@ def load_bundle(bundle_dir):
     if action.shape != (NUM_ACTIONS,):
         raise ValueError(f"policy output shape {tuple(action.shape)} != (12,)")
 
+    cfg.loaded_policy = policy
+    prepare = getattr(custom_impl, "prepare_runtime", None)
+    if prepare is not None:
+        cfg.custom_runtime = prepare(cfg)
     return policy, cfg

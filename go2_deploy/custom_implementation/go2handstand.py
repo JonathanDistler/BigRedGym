@@ -1,18 +1,13 @@
-"""Cornell MAE 4110 provisional group file; confirm name before submission.
+"""Cornell MAE 4110 handstand: four observation hooks plus optional runner bridges.
 
-Software-only staff-review candidate, ported from integration 309d5d5.
-No SDK imports, publishers, hardware activation, training or simulator truth.
-Stock Cornell runner cannot execute this safely through its four hooks alone.
-Required upstream capabilities: lossless calibrated timestamped IMU queue,
-50 Hz/EMA-off configuration, bounded target send/acknowledgement, and verified
-motor effort/overspeed limits plus staff-approved cancellation/recovery.
+The runner reads LowState directly. Optional callbacks preserve 500 Hz IMU data
+and acknowledge successful bounded-command publication (not motor tracking).
+Use --export-bundle to package the COMPLETE hybrid law; --recording retains the
+software-only recorded-sensor parity check. Live simulation/video entry point:
+  python scripts/handstand_capture.py full --help
 
-Offline usage (assets from handstand-capture-67of100-v1 release):
-  python go2_deploy/custom_implementation/go2handstand.py \
-    --checkpoint /path/capture_ppo_update2_67of100.pt \
-    --reference /path/trajectory.npz --recording /path/nominal_sensors.npz
-All 47 observation pieces below are already normalized. The separate action
-multiplier is 2 radians/unit; no EMA or additional output tanh is used.
+No SDK imports or robot connection are made by this module. Physical readiness
+requires staff validation of calibration, motor limits, contact loads and recovery.
 """
 
 from collections import deque
@@ -22,6 +17,9 @@ import argparse
 import hashlib
 import json
 import sys
+import os
+import threading
+import shutil
 import mujoco
 import numpy as np
 import torch
@@ -93,6 +91,10 @@ class InferencePolicy(nn.Module):
 
 
 def load_assets(checkpoint, reference):
+    if sys.version_info[:2] != (3, 11) or mujoco.__version__ != "3.11.0":
+        raise ValueError(
+            "Saved handstand reference requires Python 3.11 and MuJoCo 3.11.0"
+        )
     checked(checkpoint, CHECKPOINT_SHA)
     checked(reference, REFERENCE_SHA)
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -406,9 +408,20 @@ class CustomDeployConfig:
 
 def get_custom_buffers_dict():
     return {
+        "handstand_rx_lock": threading.Lock(),
+        "handstand_rx": deque(maxlen=256),
+        "handstand_rx_fault": None,
+        "handstand_rx_seen": False,
+        "handstand_last_mode": None,
+        "handstand_tick": None,
+        "handstand_sensor_time": None,
+        "handstand_last_receive": None,
+        "handstand_last_sent": None,
+        "handstand_last_control": None,
+        "handstand_activation_wait": None,
         "handstand_session": None,
         "handstand_snapshot": None,
-        "handstand_mode": "disabled",
+        "handstand_mode": "runner",
         "handstand_imu_queue": deque(maxlen=100),
         "handstand_control_snapshot": None,
         "handstand_activation": None,
@@ -417,15 +430,7 @@ def get_custom_buffers_dict():
     }
 
 
-def _reject_transport(controller):
-    if hasattr(controller, "lowcmd_publisher"):
-        if controller.handstand_session is not None:
-            controller.handstand_session.cancel()
-        controller.handstand_snapshot = None
-        raise RuntimeError("Physical activation disabled: software telemetry only")
-
-
-def update_custom_buffers(main_controller, t):
+def _update_software_buffers(main_controller, t):
     """Consume queued sensor intervals once; phase advances only on explicit ack.
 
     External dry-run driver appends calibrated tuples
@@ -434,7 +439,6 @@ def update_custom_buffers(main_controller, t):
     No latest-LowState sample is fabricated, repeated or used as an ack.
     """
     c = main_controller
-    _reject_transport(c)
     c.handstand_snapshot = None
     session = c.handstand_session
     if c.handstand_mode != "software_validation" or session is None:
@@ -475,12 +479,280 @@ def update_custom_buffers(main_controller, t):
         raise
 
 
+def read_lowstate(msg):
+    """Copy actual Unitree LowState fields into canonical FL/FR/RL/RR order."""
+    if msg is None:
+        raise ValueError("Missing runner LowState")
+    tick = int(msg.tick)
+    if not 0 <= tick < 2**32:
+        raise ValueError("Invalid LowState tick")
+    imu = msg.imu_state
+    return (
+        tick,
+        finite(imu.quaternion, (4,)).copy(),
+        finite(imu.gyroscope, (3,)).copy(),
+        finite(imu.accelerometer, (3,)).copy(),
+        finite([m.q for m in msg.motor_state[:12]], (12,))[PERMUTATION],
+        finite([m.dq for m in msg.motor_state[:12]], (12,))[PERMUTATION],
+    )
+
+
+def prepare_runtime(cfg):
+    """Load and warm before DDS initialization; calibration is never invented."""
+    if cfg.ctrl_freq != 50 or cfg.exp_moving_avg or cfg.kp != 60 or cfg.kd != 3:
+        raise ValueError("Handstand requires 50 Hz, EMA off, Kp=60, Kd=3")
+    folder = Path(cfg.bundle_dir)
+    policy, trajectory = load_assets(
+        folder / "capture_checkpoint.pt", folder / "trajectory.npz"
+    )
+    candidate = cfg.loaded_policy
+    expected = policy.state_dict()
+    actual = candidate.state_dict()
+    if set(expected) != set(actual) or any(
+        not torch.equal(expected[k], actual[k]) for k in expected
+    ):
+        raise ValueError("Bundle policy is not the complete pinned CapturePolicy")
+    with torch.no_grad():
+        for step in [0, 1, 47, 109, 110, 111, 319, 320, 400]:
+            obs = policy.centers[min(step, 319)].clone()
+            obs[:42] += torch.linspace(-0.003, 0.003, 42)
+            obs[42] = step / 400
+            if not torch.allclose(candidate(obs), policy(obs), atol=1e-7, rtol=0):
+                raise ValueError("Bundle hybrid inference differs at a phase boundary")
+    if not np.allclose(
+        np.asarray(cfg.default_dof_pos), trajectory["nominal"], atol=1e-7, rtol=0
+    ):
+        raise ValueError("Bundle nominal posture mismatch")
+    path = os.environ.get("GO2_HANDSTAND_CALIBRATION")
+    if not path:
+        raise ValueError("Set GO2_HANDSTAND_CALIBRATION to a measured calibration JSON")
+    calibration = json.loads(Path(path).read_text())
+    if calibration.get("calibrated") is not True:
+        raise ValueError("IMU/frame/height calibration is required")
+    for key in ["initial_height", "tick_period_s"]:
+        if not np.isfinite(calibration[key]) or calibration[key] <= 0:
+            raise ValueError("Invalid height or tick period")
+    IMUCalibration(**calibration["imu"])
+    model_path = checked(folder / "go2_fk.mjb", cfg.bundle_meta["handstand_fk_sha256"])
+    model = mujoco.MjModel.from_binary_path(str(model_path))
+    with torch.no_grad():
+        for _ in range(5):
+            policy(torch.zeros(47))
+    return policy, trajectory, model, calibration
+
+
+def initialize_controller(c):
+    resources = getattr(c.cfg, "custom_runtime", None)
+    if resources is None:
+        raise ValueError("Load the handstand bundle before initializing the runner")
+    policy, trajectory, model, calibration = resources
+    c.handstand_session = Session(policy, trajectory, model)
+    c.handstand_calibration = calibration
+    c.handstand_snapshot = np.zeros(47, np.float32)
+
+
+def on_lowstate_msg(c, msg, received):
+    """Optional runner callback bridge: preserve EVERY IMU frame, no SDK access."""
+    with c.handstand_rx_lock:
+        c.handstand_rx_seen = True
+        if getattr(c._state, "name", "") != "CUSTOM_CTRL":
+            c.handstand_rx.clear()
+            c.handstand_rx_fault = None
+            c.handstand_last_mode = getattr(c._state, "name", "")
+            return
+        try:
+            packet = read_lowstate(msg)
+            if len(c.handstand_rx) == c.handstand_rx.maxlen:
+                raise ValueError("LowState buffer overflow: lost IMU samples")
+            c.handstand_rx.append((float(received), packet))
+        except (ValueError, TypeError, AttributeError) as exc:
+            c.handstand_rx_fault = str(exc)
+
+
+def _runner_fault(c, message):
+    c.handstand_session.cancel()
+    c.handstand_snapshot = None
+    raise ValueError(message)
+
+
+def update_custom_buffers(c, t):
+    """Read runner state directly; external per-cycle preparation is unnecessary."""
+    if c.handstand_mode == "software_validation":
+        return _update_software_buffers(c, t)
+    if c.handstand_session is None:
+        initialize_controller(c)
+    mode = getattr(c._state, "name", "")
+    if mode != "CUSTOM_CTRL":
+        c.handstand_session.cancel()
+        c.handstand_snapshot = np.zeros(47, np.float32)
+        c.handstand_last_mode = mode
+        c.handstand_activation_wait = None
+        with c.handstand_rx_lock:
+            c.handstand_rx.clear()
+            c.handstand_rx_fault = None
+        return
+    try:
+        with c.last_lowstate_msg_lock:
+            # Actual runner source, not a driver-injected control snapshot.
+            current = read_lowstate(c.last_lowstate_msg)
+            received = float(c.last_lowstate_received_time)
+            with c.handstand_rx_lock:
+                packets = list(c.handstand_rx)
+                c.handstand_rx.clear()
+                fault = c.handstand_rx_fault
+        if fault:
+            raise ValueError(fault)
+        if not c.handstand_rx_seen:
+            raise ValueError("Runner callback bridge is missing")
+        if not np.isfinite(t) or not 0 <= t - received <= 0.006:
+            raise ValueError("Stale or future LowState")
+        starting = c.handstand_last_mode != "CUSTOM_CTRL"
+        if starting:
+            if c.handstand_last_sent is None:
+                raise ValueError(
+                    "Enter INTERMEDIATE before CUSTOM_CTRL "
+                    "to establish the dispatched target"
+                )
+            if not packets:
+                if c.handstand_activation_wait is None:
+                    c.handstand_activation_wait = t
+                if t - c.handstand_activation_wait > 0.02:
+                    raise ValueError("No activation IMU stream")
+                c.handstand_snapshot = None
+                return False
+            c.handstand_imu_calibration = IMUCalibration(
+                **c.handstand_calibration["imu"]
+            )
+            c.handstand_tick = None
+            c.handstand_sensor_time = 0.0
+            c.handstand_last_raw = None
+            c.handstand_activation_wait = None
+            c.handstand_last_receive = None
+            c.handstand_last_control = None
+        elif (
+            c.handstand_last_control is not None
+            and abs(t - c.handstand_last_control - 0.02) > 0.002 + 1e-9
+        ):
+            raise ValueError("Runner cadence differs from 50 Hz")
+        session = c.handstand_session
+        for arrival, packet in packets:
+            tick, quaternion, gyro, force, q, dq = packet
+            if c.handstand_tick is not None:
+                delta = (tick - c.handstand_tick) % (2**32)
+                if delta == 0:
+                    if any(
+                        not np.array_equal(a, b)
+                        for a, b in zip(packet[1:], c.handstand_last_raw[1:])
+                    ):
+                        raise ValueError("Conflicting duplicate IMU timestamp")
+                    continue  # Duplicate never advances integration/freshness.
+                dt = delta * c.handstand_calibration["tick_period_s"]
+                if not 0 < dt <= 0.003:
+                    raise ValueError("Missing or out-of-order IMU frame")
+                c.handstand_sensor_time += dt
+            else:
+                session.activate(
+                    0.0, c.handstand_calibration["initial_height"], calibrated=True
+                )
+                session.path.target = finite(c.handstand_last_sent, (12,)).copy()
+                if np.any(session.path.target < session.path.bounds[:, 0]) or np.any(
+                    session.path.target > session.path.bounds[:, 1]
+                ):
+                    raise ValueError(
+                        "Initial dispatched target is outside joint limits"
+                    )
+            quaternion, gyro, force = c.handstand_imu_calibration.correct(
+                c.handstand_sensor_time, quaternion, gyro, force
+            )
+            session.ingest(c.handstand_sensor_time, force, quaternion, gyro, q, dq)
+            c.handstand_last_raw = packet
+            c.handstand_tick = tick
+            c.handstand_last_receive = arrival
+        if (
+            c.handstand_last_receive is None
+            or not 0 <= t - c.handstand_last_receive <= 0.006
+        ):
+            raise ValueError("No fresh distinct IMU sample")
+        if c.handstand_tick != current[0]:
+            raise ValueError("Unsynchronized encoder/IMU snapshot")
+        if starting and (
+            np.max(abs(session.telemetry[2] - session.path.initial)) > 0.15
+            or np.max(abs(session.telemetry[3])) > 0.2
+        ):
+            raise ValueError(
+                "Activation requires calibrated stationary reference posture"
+            )
+        q, dq = session.telemetry[2:]
+        if (
+            np.any(q < session.path.bounds[:, 0] - 0.001)
+            or np.any(q > session.path.bounds[:, 1] + 0.001)
+            or np.any(abs(dq) > SPEED * 1.001)
+        ):
+            raise ValueError("Encoder joint range or velocity protection tripped")
+        if session.pending is not None:
+            raise ValueError("Previous command was not published")
+        c.handstand_snapshot = session.snapshot(c.handstand_sensor_time)
+        c.handstand_last_mode = mode
+        c.handstand_last_control = t
+    except (ValueError, TypeError, RuntimeError, AttributeError) as exc:
+        _runner_fault(c, str(exc))
+
+
+def bound_command(c, offset, kp_mult=1.0, kd_mult=1.0):
+    if getattr(c._state, "name", "") != "CUSTOM_CTRL":
+        return offset + c.cfg.default_dof_pos
+    session = c.handstand_session
+    if not session.active or c.handstand_snapshot is None:
+        raise ValueError("Handstand is inactive or faulted")
+    if c.kp_mult != 1 or c.kd_mult != 1 or kp_mult != 1 or kd_mult != 1:
+        raise ValueError("Handstand gains must stay 60/3")
+    if session.pending is not None:
+        raise ValueError("Unpublished handstand command")
+    desired = np.clip(
+        session.path.nominal + finite(np.asarray(offset), (12,)), *session.path.bounds.T
+    )
+    target = session.path.target + np.clip(
+        desired - session.path.target, -0.7 * SPEED * 0.02, 0.7 * SPEED * 0.02
+    )
+    # Unitree MotorCmd.q is float32 on the wire. Quantize inward so neither
+    # the joint bounds nor the applied-target slew limit is rounded outward.
+    lo = np.maximum(session.path.bounds[:, 0], session.path.target - 0.7 * SPEED * 0.02)
+    hi = np.minimum(session.path.bounds[:, 1], session.path.target + 0.7 * SPEED * 0.02)
+    wire = target.astype(np.float32)
+    wire = np.where(
+        wire.astype(float) < lo,
+        np.nextafter(lo.astype(np.float32), np.float32(np.inf)),
+        wire,
+    )
+    wire = np.where(
+        wire.astype(float) > hi,
+        np.nextafter(hi.astype(np.float32), np.float32(-np.inf)),
+        wire,
+    )
+    target = wire.astype(float)
+    session.pending = target.copy()
+    # No second action scale or EMA. Ack tracks the actual float32 command.
+    c.last_action[0] = torch.tensor(
+        target - session.path.nominal, dtype=c.last_action.dtype
+    )
+    return torch.from_numpy(target.copy())
+
+
+def on_command_sent(c, lowcmd, accepted, t):
+    """Track successful DDS publication, never claim physical motor tracking."""
+    if accepted is not True:
+        _runner_fault(c, "LowCmd publication failed or was not confirmed")
+    target = finite([m.q for m in lowcmd.motor_cmd[:12]], (12,))[PERMUTATION]
+    if getattr(c._state, "name", "") == "CUSTOM_CTRL":
+        c.handstand_session.acknowledge(target)
+    c.handstand_last_sent = target.copy()
+
+
 def get_custom_obs_pieces():
     # Standard Cornell gyro/gravity/q/dq getters match units/order only for an
     # uncalibrated latest message. Override them to keep ONE calibrated snapshot.
     def getter(start, end):
         def piece(main_controller, lowstate_msg):
-            _reject_transport(main_controller)
             if main_controller.handstand_snapshot is None:
                 raise RuntimeError("Missing handstand sensor estimate")
             return torch.from_numpy(
@@ -514,7 +786,6 @@ def build_fk_model():
 
 
 def configure_software_validation(controller, checkpoint, reference):
-    _reject_transport(controller)
     if sys.version_info[:2] != (3, 11) or mujoco.__version__ != "3.11.0":
         raise RuntimeError("Reference validation requires Python 3.11/MuJoCo 3.11.0")
     policy, trajectory = load_assets(checkpoint, reference)
@@ -600,12 +871,75 @@ def dry_run(checkpoint, reference, recording):
     return result
 
 
+def export_runtime_bundle(checkpoint, reference, destination):
+    destination = Path(destination)
+    if destination.exists():
+        raise FileExistsError("Choose a fresh bundle directory")
+    policy, trajectory = load_assets(checkpoint, reference)
+    model = build_fk_model()
+    destination.mkdir(parents=True)
+    shutil.copy2(checkpoint, destination / "capture_checkpoint.pt")
+    shutil.copy2(reference, destination / "trajectory.npz")
+    torch.jit.save(torch.jit.script(policy), str(destination / "policy.pt"))
+    mujoco.mj_saveModel(model, str(destination / "go2_fk.mjb"))
+
+    def digest(name):
+        return hashlib.sha256((destination / name).read_bytes()).hexdigest()
+
+    meta = {
+        "task_name": "go2handstand",
+        "custom_implementation": "go2handstand.py",
+        "obs_vector": list(SLICES),
+        "obs_sizes": CustomDeployConfig.custom_obs_sizes,
+        "scaling": {name: 1.0 for name in SLICES} | {"dof_pos_target": 2.0},
+        "default_dof_pos": trajectory["nominal"].tolist(),
+        "phase_frequency": 0.0,
+        "kp": 60.0,
+        "kd": 3.0,
+        "ctrl_freq": 50,
+        "exp_moving_avg": False,
+        "command_limits": {"lin_vel_x": 0.0, "lin_vel_y": 0.0, "yaw_vel": 0.0},
+        "num_obs": 47,
+        "num_actions": 12,
+        "policy_sha256": digest("policy.pt"),
+        "handstand_fk_sha256": digest("go2_fk.mjb"),
+        "checkpoint_sha256": CHECKPOINT_SHA,
+        "reference_sha256": REFERENCE_SHA,
+        "physical_readiness": "UNVALIDATED",
+    }
+    (destination / "deploy_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    example = {
+        "calibrated": False,
+        "initial_height": None,
+        "tick_period_s": None,
+        "imu": {
+            "body_from_imu": np.eye(3).tolist(),
+            "world_alignment": np.eye(3).tolist(),
+            "lever_arm_body": [0.0, 0.0, 0.0],
+            "accel_bias_imu": [0.0, 0.0, 0.0],
+            "gyro_bias_imu": [0.0, 0.0, 0.0],
+        },
+    }
+    (destination / "calibration.example.json").write_text(
+        json.dumps(example, indent=2) + "\n"
+    )
+    return meta
+
+
 if __name__ == "__main__":
     # File-path execution needs repository root for existing Cornell model code.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--reference", type=Path, required=True)
-    parser.add_argument("--recording", type=Path, required=True)
+    parser.add_argument("--recording", type=Path)
+    parser.add_argument("--export-bundle", type=Path)
     arguments = parser.parse_args()
-    dry_run(arguments.checkpoint, arguments.reference, arguments.recording)
+    if arguments.export_bundle:
+        export_runtime_bundle(
+            arguments.checkpoint, arguments.reference, arguments.export_bundle
+        )
+    elif arguments.recording:
+        dry_run(arguments.checkpoint, arguments.reference, arguments.recording)
+    else:
+        parser.error("Choose --recording or --export-bundle")

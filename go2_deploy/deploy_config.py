@@ -8,14 +8,15 @@ class DeployConfig:
     task_name = "go2trot"
 
     ctrl_freq = 100  # Hz
+    phase_frequency = 2.0  # Legacy bundle/config contract; custom buffers may override.
 
     kp = 30.0  # Default stiffness constant
     kd = 2.0  # Default damping constant
 
     # Apply exponential moving average to actions
     exp_moving_avg = True
-    ema_time_const = 0.095      # seconds
-    ema_smoothing_factor = -np.expm1(-(1/ctrl_freq)/ema_time_const)     # alpha in EMA
+    ema_time_const = 0.095  # seconds
+    ema_smoothing_factor = -np.expm1(-(1 / ctrl_freq) / ema_time_const)  # alpha in EMA
 
     obs_vector = custom_impl.CustomDeployConfig.obs_vector
 
