@@ -1,8 +1,8 @@
-"""Direct transcription: minimize zero, subject to manipulator/contact constraints.
+"""Direct transcription with default zero cost and optional calf clearance cost.
 
 Variables at each node: configuration chart18, velocity18, acceleration18,
-joint torque12, world point-foot force12. No policy/reward or reference tracking
-objective is used. Reference is used only to specify the terminal boundary pose.
+joint torque12, world point-foot force12. No learned policy or reference-tracking
+objective is used here. Reference specifies the terminal boundary pose.
 """
 
 import mujoco
@@ -34,13 +34,25 @@ class Problem:
             raise ValueError("Expected finite trajectory decision vector")
         return x.reshape(self.nodes, WIDTH)
 
-    @staticmethod
-    def objective(x):
-        return 0.0
+    def objective(self, x):
+        if not self.cfg.calf_penalty_weight:
+            return 0.0
+        residual = self.calf_penalty(x)
+        return 0.5 * float(residual @ residual)
 
-    @staticmethod
-    def objective_gradient(x):
-        return np.zeros_like(x)
+    def objective_gradient(self, x):
+        gradient = np.zeros_like(x)
+        if self.cfg.calf_penalty_weight:
+            # Not needed by sparse restoration. Kept consistent for callers;
+            # only configuration coordinates influence geometric clearance.
+            for k in range(self.nodes):
+                for j in range(18):
+                    i = k * WIDTH + j
+                    plus, minus = np.array(x, copy=True), np.array(x, copy=True)
+                    plus[i] += 1e-6
+                    minus[i] -= 1e-6
+                    gradient[i] = (self.objective(plus) - self.objective(minus)) / 2e-6
+        return gradient
 
     def target(self, row):
         return (
@@ -195,6 +207,48 @@ class Problem:
                 0.95 * r.effort,
             )
         return rows.ravel()
+
+    def calf_samples(self, x):
+        """Node and intermediate manifold-path calf geometry samples."""
+        rows = self.unpack(x)
+        for k, row in enumerate(rows):
+            q = self.robot.pose(row[Y])
+            self.robot.set(q)
+            yield self.robot.calf_heights(), (k,)
+            if k < self.nodes - 1:
+                tangent = np.empty(18)
+                mujoco.mj_differentiatePos(
+                    self.robot.m, tangent, 1, q, self.robot.pose(rows[k + 1, Y])
+                )
+                for j in range(self.cfg.sweep_substeps):
+                    trial = q.copy()
+                    mujoco.mj_integratePos(
+                        self.robot.m,
+                        trial,
+                        tangent,
+                        (j + 1) / (self.cfg.sweep_substeps + 1),
+                    )
+                    self.robot.set(trial)
+                    yield self.robot.calf_heights(), (k, k + 1)
+
+    def calf_penalty(self, x):
+        weight = np.sqrt(self.cfg.calf_penalty_weight)
+        return np.concatenate(
+            [
+                weight
+                * np.minimum(heights - self.cfg.calf_buffer, 0)
+                / self.cfg.calf_buffer
+                for heights, _ in self.calf_samples(x)
+            ]
+        )
+
+    def calf_penalty_sparsity(self, x):
+        samples = list(self.calf_samples(x))
+        mat = lil_matrix((4 * len(samples), len(x)), dtype=int)
+        for i, (_, depends) in enumerate(samples):
+            for node in depends:
+                mat[4 * i : 4 * i + 4, node * WIDTH : (node + 1) * WIDTH] = 1
+        return mat.tocsr()
 
     def blocks(self, x, solver=False):
         rows = self.unpack(x)
@@ -359,6 +413,17 @@ class Problem:
                     1,
                     [k, k + 1],
                 )
+        # The existing body primitive floor already covers calves at nodes.
+        # Avoid duplicate inequalities in the untouched default formulation.
+        if c.calf_clearance > c.body_clearance or c.sweep_substeps:
+            for heights, depends in self.calf_samples(x):
+                add(
+                    "ineq",
+                    "calf_surface_clearance",
+                    heights - c.calf_clearance,
+                    0.1,
+                    depends,
+                )
         return blocks
 
     def values(self, x, kind):
@@ -413,7 +478,7 @@ class Problem:
             default=0,
         )
         return {
-            "objective": 0.0,
+            "objective": self.objective(x),
             "maximum_scaled_equality_violation": eq,
             "maximum_scaled_inequality_violation": iq,
             "maximum_bound_violation": bound_error,

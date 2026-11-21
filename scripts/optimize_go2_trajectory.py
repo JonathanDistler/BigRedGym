@@ -1,4 +1,4 @@
-"""Solve zero-task-cost constrained trajectory feasibility; no hardware I/O."""
+"""Constrained trajectory feasibility with optional calf cost; no hardware I/O."""
 
 import argparse
 import hashlib
@@ -75,6 +75,9 @@ def solve(
                 row[A] = np.linalg.solve(M, generalized - h)
         return full
 
+    if problem.cfg.calf_penalty_weight and method != "restoration":
+        raise ValueError("Calf preference penalty requires restoration solver")
+
     if method == "restoration":
         # Numerical feasibility merit only, not a trajectory/task cost. Bounds
         # remain hard; every original constraint is independently re-audited.
@@ -85,6 +88,10 @@ def solve(
         pattern = vstack(
             [problem.sparsity(base, "eq"), problem.sparsity(base, "ineq")]
         ).tocsr()[:, free]
+        if problem.cfg.calf_penalty_weight:
+            pattern = vstack(
+                [pattern, problem.calf_penalty_sparsity(base)[:, free]]
+            ).tocsr()
         if eliminate_dynamics:
             from scipy.sparse import lil_matrix
 
@@ -105,6 +112,8 @@ def solve(
             eq = problem.values(full, "eq")
             inequality = problem.values(full, "ineq")
             residuals = np.r_[eq, np.minimum(inequality, 0)]
+            if problem.cfg.calf_penalty_weight:
+                residuals = np.r_[residuals, problem.calf_penalty(full)]
             if eliminate_dynamics:
                 acceleration = full.reshape(problem.nodes, 78)[:, A]
                 residuals = np.r_[
@@ -215,6 +224,10 @@ def main():
     p.add_argument("--from-candidate", type=Path)
     p.add_argument("--refine-worst", type=int, default=0)
     p.add_argument("--eliminate-dynamics", action="store_true")
+    p.add_argument("--calf-clearance", type=float, default=0.003)
+    p.add_argument("--calf-buffer", type=float, default=0.03)
+    p.add_argument("--calf-penalty", type=float, default=0)
+    p.add_argument("--sweep-substeps", type=int, default=0)
     p.add_argument(
         "--solver", choices=["trust-constr", "restoration"], default="trust-constr"
     )
@@ -257,6 +270,10 @@ def main():
         release_fraction=args.release_fraction,
         contact_acceleration=not args.discrete_contact,
         foot_velocity_tolerance=args.stance_velocity,
+        calf_clearance=args.calf_clearance,
+        calf_buffer=args.calf_buffer,
+        calf_penalty_weight=args.calf_penalty,
+        sweep_substeps=args.sweep_substeps,
     )
     robot = Robot(cfg)
     start, goal, anchors, nominal = robot.endpoints(args.reference)
@@ -329,7 +346,7 @@ def main():
         else "NOT_FEASIBLE",
         "hardware_ready": False,
         "task_reward": None,
-        "task_cost": 0.0,
+        "task_cost": problem.objective(candidate),
         "settings": asdict(cfg),
         "seed_method": args.seed,
         "warm_start_report": warm_start_report,

@@ -67,7 +67,7 @@ def position_commands(saved, speed, hold_seconds):
     return grid, np.array(commands)
 
 
-def replay(directory, hold_seconds=5.0):
+def replay(directory, hold_seconds=5.0, command_override=None):
     robot, problem, saved, mesh = audit_saved(directory)
     if hold_seconds < 5:
         raise ValueError("Five-second hold cannot be weakened")
@@ -84,14 +84,38 @@ def replay(directory, hold_seconds=5.0):
         "root_orientation_tracking_rad": 0.0,
         "minimum_body_clearance_m": float("inf"),
         "max_speed_ratio": 0.0,
+        "max_joint_limit_violation_rad": 0.0,
         "max_torque_speed_violation_Nm": 0.0,
     }
     illegal = None
+    calf_minimum = np.full(4, np.inf)
     state_safe = True
     hold = best_hold = 0.0
     from gym.envs.go2.handstand_replay import clearance, strict_balance, TARGET_ROTATION
 
     grid, commands = position_commands(saved, robot.speed, hold_seconds)
+    if command_override is not None:
+        override_grid, override_commands = map(np.asarray, command_override)
+        if (
+            not np.array_equal(override_grid, grid)
+            or override_commands.shape != commands.shape
+            or not np.isfinite(override_commands).all()
+        ):
+            raise ValueError("Invalid command override timing/shape")
+        if (
+            np.any(override_commands < robot.bounds[:, 0])
+            or np.any(override_commands > robot.bounds[:, 1])
+            or np.any(abs((override_commands - saved["nominal"]) / 2) > 1 + 1e-9)
+            or np.any(
+                abs(np.diff(override_commands, axis=0))
+                > 0.7 * robot.speed * CONTROL_DT + 1e-9
+            )
+            or not np.array_equal(override_commands[0], commands[0])
+        ):
+            raise ValueError(
+                "Command override violates target limits or initialization"
+            )
+        commands = override_commands.copy()
     # Native compliant contacts; never inject planned forces or reset the state.
     for time, target in zip(grid, commands):
         for _ in range(round(CONTROL_DT / PHYSICS_DT)):
@@ -115,6 +139,10 @@ def replay(directory, hold_seconds=5.0):
             errors["max_speed_ratio"] = max(
                 errors["max_speed_ratio"],
                 float(abs(d.qvel[robot.vids] / robot.speed).max()),
+            )
+            calf_minimum = np.minimum(
+                calf_minimum,
+                [min(clearance(m, d, g) for g in gs) for gs in robot.calf_geoms],
             )
             lowest = min(clearance(m, d, g) for g in robot.robot_geoms)
             errors["minimum_body_clearance_m"] = min(
@@ -184,6 +212,18 @@ def replay(directory, hold_seconds=5.0):
                 (d.qpos[robot.qids] >= robot.bounds[:, 0] - 0.001).all()
                 and (d.qpos[robot.qids] <= robot.bounds[:, 1] + 0.001).all()
             )
+            errors["max_joint_limit_violation_rad"] = max(
+                errors["max_joint_limit_violation_rad"],
+                float(
+                    np.maximum(
+                        np.maximum(
+                            robot.bounds[:, 0] - d.qpos[robot.qids],
+                            d.qpos[robot.qids] - robot.bounds[:, 1],
+                        ),
+                        0,
+                    ).max()
+                ),
+            )
             state_safe &= legal_joints
             strict = strict_balance(
                 safe=state_safe
@@ -230,6 +270,24 @@ def replay(directory, hold_seconds=5.0):
         "replay_seconds": float(d.time),
         "initial_crouch_height_m": initial_height,
         "first_illegal_contact": illegal,
+        "minimum_calf_clearance_m": calf_minimum.tolist(),
+        "collision_free": bool(
+            illegal is None
+            and errors["minimum_body_clearance_m"] >= 0
+            and calf_minimum.min() >= 0
+        ),
+        "handstand_success": bool(
+            illegal is None
+            and best_hold >= 5
+            and state_safe
+            and errors["max_speed_ratio"] <= 1.001
+            and errors["max_torque_speed_violation_Nm"] <= 1e-6
+            and errors["minimum_body_clearance_m"] >= robot.cfg.body_clearance
+        ),
+        "command_source": "shooting_override"
+        if command_override is not None
+        else "mesh_targets",
+        "commands_sha256": hashlib.sha256(commands.tobytes()).hexdigest(),
         "continuous_terminal_hold_seconds": best_hold,
         "terminal_goal_error": egoal.tolist(),
         "errors": errors,
@@ -237,7 +295,8 @@ def replay(directory, hold_seconds=5.0):
             (Path(directory) / "candidate.npz").read_bytes()
         ).hexdigest(),
         "native_replay_pass": bool(
-            illegal is None
+            command_override is None
+            and illegal is None
             and best_hold >= 5
             and errors["max_torque_speed_violation_Nm"] <= 1e-6
             and mesh["mesh_feasible"]
@@ -250,7 +309,10 @@ def replay(directory, hold_seconds=5.0):
         "hardware_ready": False,
         "prefix_joint_legal": bool(state_safe),
     }
-    (Path(directory) / "replay.json").write_text(json.dumps(result, indent=2) + "\n")
+    (
+        Path(directory)
+        / ("replay_commands.json" if command_override is not None else "replay.json")
+    ).write_text(json.dumps(result, indent=2) + "\n")
     return result
 
 

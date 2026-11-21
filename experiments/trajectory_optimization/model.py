@@ -1,4 +1,4 @@
-"""Nominal Go2 manipulator model. No solver contact forces are used by the NLP."""
+"""Nominal Go2 model. Native contact-solver forces are not used by the NLP."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +32,10 @@ class Settings:
     min_front_rear_distance: float = 0.10
     min_foot_hip_distance: float = 0.08
     body_clearance: float = 0.003
+    calf_clearance: float = 0.003
+    calf_buffer: float = 0.03
+    calf_penalty_weight: float = 0.0
+    sweep_substeps: int = 0
     foot_velocity_tolerance: float = 0.002
     max_foot_drift: float = 0.04
     max_force_bodyweights: float = 3.0
@@ -56,6 +60,8 @@ class Settings:
                 self.min_front_rear_distance,
                 self.min_foot_hip_distance,
                 self.body_clearance,
+                self.calf_clearance,
+                self.calf_buffer,
                 self.foot_velocity_tolerance,
                 self.max_foot_drift,
                 self.max_force_bodyweights,
@@ -66,6 +72,14 @@ class Settings:
             <= 0
         ):
             raise ValueError("Constraint margins must be positive")
+
+        if (
+            self.calf_penalty_weight < 0
+            or not isinstance(self.sweep_substeps, int)
+            or self.sweep_substeps < 0
+            or self.calf_buffer < self.calf_clearance
+        ):
+            raise ValueError("Invalid calf clearance/penalty/sweep settings")
 
         if self.mesh_times:
             t = np.asarray(self.mesh_times, dtype=float)
@@ -130,6 +144,16 @@ class Robot:
             for g in range(self.m.ngeom)
             if self.m.geom_bodyid[g] and g not in self.foot_geoms
         ]
+        self.calf_geoms = [
+            [
+                g
+                for g in self.robot_geoms
+                if self.m.body(int(self.m.geom_bodyid[g])).name == leg + "_calf"
+            ]
+            for leg in ("FL", "FR", "RL", "RR")
+        ]
+        if any(not geoms for geoms in self.calf_geoms):
+            raise ValueError("Missing calf collision geometry")
         self.mass = float(self.m.body_subtreemass[self.base])
         if self.cfg.friction > self.m.geom_friction[0, 0]:
             raise ValueError("Requested friction exceeds nominal ground friction")
@@ -181,6 +205,12 @@ class Robot:
             mujoco.mj_jacGeom(self.m, self.d, j, None, g)
             jac.append(j)
         return position, np.array(jac)
+
+    def calf_heights(self):
+        """Lowest primitive surface, not the joint origin or geometry center."""
+        return np.array(
+            [min(clearance(self.m, self.d, g) for g in gs) for gs in self.calf_geoms]
+        )
 
     def terms(self, q, v):
         self.set(q, v)

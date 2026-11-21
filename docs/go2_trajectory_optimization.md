@@ -449,3 +449,151 @@ The best restoration trial by equality error (v2) has raw dynamics residual 16.6
 Native PD replay of v1 detects rear-calf contact at **1.078 s**. Replay of v2 detects rear-calf contact at **1.400 s**, achieves **zero seconds** continuous terminal hold, and records joint/root-position/root-orientation tracking errors 0.593720 rad / 0.372703 m / 0.848593 rad. The exact-dynamics variant also fails native replay, with front-calf contact at **1.070 s** and zero terminal hold. The v2 export test rejects the candidate at the original strict-contact audit and creates no output asset directory. Lower mesh residuals have not yet yielded successful native dynamics.
 
 All scratch artifacts remain ignored under `output/trajectory_*`. No candidate is accepted or offered for physical deployment. The smallest useful next investigation is the floating-base dynamics residual by interval and release timing, followed by an integration-consistent state/control warm start and a finer-mesh native-contact study. Blindly increasing node count did not improve this experiment. Collision or actuator constraints must not be dropped to disguise the failure.
+
+## 20. Calf-contact investigation: constraints versus native-rollout penalties
+
+This follow-up explicitly authorizes nonzero clearance costs as an alternative to a pure feasibility problem. The default transcription still has zero task cost. Existing successful CapturePolicy code, checkpoints and reference files remain unchanged. All experiments described here run in software; none connect to the Unitree SDK or a robot.
+
+### 20.1 Diagnose the actual failure before tightening a constraint
+
+The failed 16-interval candidate has more than 8 cm planned calf clearance. Sampling the manifold-interpolated planned path every 2 ms gives FL/FR/RL/RR minima **0.0839650 / 0.0844426 / 0.0841945 / 0.0841693 m**. Native bounded position-PD replay nevertheless produces rear-calf contact at 1.400 s, with large root/joint tracking errors (Section 19). This is not a marginal 3 mm knot-clearance problem: the executed state departs substantially from an already clear planned state. A larger planned margin alone does not repair violated dynamics or the loss of support in the executed motion.
+
+The geometry test uses the lowest point of each complete calf collision primitive, including its rotation and extent, rather than knee position, cylinder-center height or a foot-height proxy. `Robot.calf_heights()` groups every collision geometry belonging to each calf. The native objective samples this surface clearance at every 500 Hz physics step and keeps the minimum over each 20 ms control interval.
+
+### 20.2 Hard geometric floor plus a clearance preference
+
+`--calf-clearance d_h` adds explicit hard calf-surface inequalities
+
+\[
+c_{i,k}=\min_{g\in\mathcal G_{\mathrm{calf},i}}\operatorname{clearance}(g,q_k)\ge d_h.
+\]
+
+`--sweep-substeps m` adds the same inequalities at \(m\) intermediate configurations per interval, interpolated with MuJoCo's configuration-manifold difference/integration operators. These are sampled checks, not a swept-volume collision certificate. They do not predict tracking error.
+
+The optional `--calf-buffer d_b --calf-penalty w` adds a nonzero geometric preference
+
+\[
+J_{\mathrm{calf}}=\frac{w}{2}\sum_s\sum_{i=1}^4
+\left[\max\left(0,\frac{d_b-c_i(q_s)}{d_b}\right)\right]^2,
+\quad d_b\ge d_h>0.
+\]
+
+The exact same normalized residual enters sparse restoration alongside the constraint residuals. The objective and report now identify this optional cost explicitly; the zero-cost default remains available. The buffer is a soft preference. The floor and all original collision/joint/actuator acceptance conditions remain hard audit criteria.
+
+A measured trial used a 25 mm floor, 100 mm preferred buffer, weight 100 and two intermediate samples per interval. It passed the sampled calf floor but still failed dynamics and native replay. This confirms that penalizing an already clear *planned* calf path is insufficient for the observed tracking-collapse failure.
+
+### 20.3 Native single shooting: penalize the executed state
+
+`experiments/trajectory_optimization/shooting.py` and `scripts/optimize_go2_clearance.py` optimize joint-position target corrections through continuous native MuJoCo contact dynamics. Each rollout starts from the same crouched state with zero velocity. It never injects planned ground forces, teleports a later state or resets after contact. Diagnostic optimization rollouts continue after contact to measure the failed tail; the independent acceptance replay stops at the first illegal contact.
+
+The parameters are piecewise-linear corrections to front thigh, front calf, rear thigh and rear calf targets, with left/right sharing each sagittal correction. Hip commands retain the source trajectory. The initial correction is exactly zero. Native commands are joint positions in radians; normalized actions are not scaled a second time. Every command is clipped to joint limits and the nominal ±2 rad action range, then slew-limited using the original speed-based target limit. The 500 Hz native PD torque calculation retains Kp=60, Kd=3, effort clipping and overspeed protection. These protections are never optimized away.
+
+Let \(\hat c_{i,k}\) be the minimum executed calf clearance over the ten physics steps of control interval \(k\). The main clearance residual is
+
+\[
+r^{\mathrm{calf}}_{i,k}=\sqrt{w_c}\,
+\frac{\max(0,d_b-\hat c_{i,k})}{d_b}.
+\]
+
+Additional residuals penalize nonfoot body clearance below 15 mm, actual illegal-contact penetration scaled by 5 mm, joint-range/speed violations and excess over the provisional torque-speed curve. The real motor protections remain unchanged even if that provisional-curve residual is violated. The independent validator still rejects these violations; costs are search guidance, not safety guarantees.
+
+To discourage avoiding contact by abandoning the handstand, body position and manifold-orientation tracking residuals are included, with scales (0.10,0.10,0.05) m and 0.20 rad, multiplied by the square root of `--pose-weight`. Joint tracking uses scale 0.3 rad and weight factor 0.2; final generalized velocity is normalized by 0.25 m/s, 0.5 rad/s and 1 rad/s for base translation, rotation and joints. A small 0.1-times-offset residual regularizes excessive corrections. The optimized cost is one half the squared norm of this complete residual vector. Different weights or horizons produce different objectives, so raw costs must not be compared across those runs.
+
+A finite-difference Jacobian uses an absolute 2 mrad parameter perturbation, including at zero. Best measured merit may come from a valid finite-difference probe, not only an accepted least-squares step. The software budget is checked before new simulations. The selected point is recorded with its parameters, native trace and bounded command sequence, then independently replayed with the full five-second hold window. This is deterministic nominal single shooting, not robust MPC, PPO or physical safety validation.
+
+### 20.4 Horizon continuation and acceptance rules
+
+A short optimization horizon can avoid the strongly nonsmooth fallen-robot tail. It is an initialization tool only. `--horizon 1.6`, for example, optimizes the prefix while the saved command sequence and independent replay still cover the complete maneuver plus five seconds. `--initial-offsets` carries its parameters to a longer horizon. Changing knot count interpolates the correction curves with the initial zero offset preserved.
+
+Neither a short collision-free prefix, a lower numerical cost nor a solver success message establishes a successful handstand. The original strict front-support/orientation/clearance/velocity gate and continuous five-second hold remain the acceptance criteria. Command overrides are tagged and hashed separately; they cannot inherit mesh-command certification or pass the existing export path. All shooting archives are explicitly experimental and not exportable. The four-hook staff runtime file remains unchanged and physically disabled.
+
+### 20.5 Commands and measured evidence
+
+Use the same Python 3.11 / MuJoCo 3.11.0 environment and external reference requirements as above. `output/trajectory_refine_restore_v2` denotes the archived, failed 16-interval input from Section 19; keep it intact. Freshly regenerating that input with different source or settings can change the numerical result. Per-run input and source hashes identify the actual evidence.
+
+```bash
+# Add geometric floor, intermediate samples and an explicit clearance cost.
+python scripts/optimize_go2_trajectory.py \
+  --from-candidate output/trajectory_refine_restore_v2 \
+  --intervals 16 --contact-mesh --discrete-contact --stance-velocity 0.02 \
+  --solver restoration --calf-clearance .025 --calf-buffer .10 \
+  --calf-penalty 100 --sweep-substeps 2 \
+  --iterations 40 --max-seconds 150 --output output/calf_geometry_NEW
+
+# Optimize an early native-contact prefix; full replay is still performed.
+python scripts/optimize_go2_clearance.py \
+  --candidate output/trajectory_refine_restore_v2 \
+  --output output/calf_prefix_NEW --knots 3 --horizon 1.6 \
+  --buffer .06 --weight 10000 --evaluations 25 --max-seconds 120
+
+# Transfer to more knots and a longer prefix, strengthening pose tracking.
+python scripts/optimize_go2_clearance.py \
+  --candidate output/trajectory_refine_restore_v2 \
+  --output output/calf_extended_NEW --knots 6 --horizon 2.2 \
+  --buffer .06 --weight 10000 --pose-weight 25 --offset-bound 1.0 \
+  --initial-offsets output/calf_prefix_NEW/shooting_commands.npz \
+  --evaluations 30 --max-seconds 200
+```
+
+Measured comparisons (all runs are nominal software simulations):
+
+| Method | Optimization window | Minimum calf clearance within that window | First illegal contact in full replay | Five-second handstand hold |
+| --- | ---: | ---: | --- | ---: |
+| Original failed source | 2.4 s planned | Planned minimum 83.97 mm | Rear calf, 1.400 s | 0 s |
+| 25 mm planned floor + soft 100 mm buffer | 2.4 s planned | Sampled hard floor passes | Rear calf, 1.394 s | 0 s |
+| Native shooting, weight 100 / 40 mm buffer | 2.8 s | −1.622 mm | Front calf, 1.406 s | 0 s |
+| Native shooting, weight 10,000 / 60 mm buffer, direct long-window start | 2.8 s | −1.629 mm | Front calf, 1.406 s | 0 s |
+| Native prefix continuation | 1.6 s | **59.48 mm** | Front calf, 2.014 s | 0 s |
+| More knots + stronger pose tracking | 2.2 s | **54.69 mm** | Front calf, 2.416 s | 0 s |
+| Full-window continuation, pose weight 1000 | 2.8 s | **31.23 mm** | **None over 7.4 s** | **0 s** |
+
+The full-window continuation records **17.87 mm** minimum calf clearance during the complete 7.4-second replay, but has **0.0346020 rad actual joint-limit overshoot** and large goal error. A command target lying within the joint range does not guarantee that the dynamically tracked joint remains in range. This candidate is rejected despite being collision-free.
+
+### 20.6 Inward target margins and goal-versus-clearance separation
+
+`--target-margin m` strengthens the commanded joint limits to \([q_{min}+m,q_{max}-m]\), intersected with the nominal ±2 rad action range. It rejects an incompatible initial target rather than silently changing initialization. Actual motor effort/speed limits, modeled joint bounds and validation tolerances remain unchanged. The inward margin is a control-design parameter, not a measured physical safety buffer.
+
+Fixed-parameter replays of the full-window candidate gave:
+
+| Inward target margin | Minimum calf clearance, full 7.4 s | Maximum actual joint-limit excess | Illegal body contact | Handstand hold |
+| ---: | ---: | ---: | --- | ---: |
+| 0 rad | 17.87 mm | 0.0346020 rad | None | 0 s |
+| 0.02 rad | 15.13 mm | 0.0262875 rad | None | 0 s |
+| 0.04 rad | 12.37 mm | 0.0174661 rad | None | 0 s |
+| **0.08 rad** | **6.786 mm** | **0 rad** | **None** | **0 s** |
+
+For the 0.08 rad margin trial, minimum nonfoot body clearance is also 6.786 mm, maximum joint speed ratio is 0.28617, and measured excess over the provisional torque-speed envelope is zero. This is a useful **collision-free, joint-legal nominal warm start**, but it remains far from the terminal handstand pose: final orientation error is approximately 66 degrees. It is not an accepted handstand trajectory, robust controller or physically ready system. Actual rear support/goal/continuous-hold requirements are not waived.
+
+The 0.08 rad case is stored locally under `output/trajectory_calf_margin_80mrad`; the unit is **milliradians**, not millimetres. The prior full-window solve is `output/trajectory_calf_full_v4`. The full-window command sequence and reassessments are ignored scratch artifacts, never release/deployment assets. The command replay now reports separate `collision_free`, `handstand_success`, `prefix_joint_legal` and maximum actual joint-limit excess fields, so contact avoidance cannot be mistaken for task success.
+
+For the final alternative, `--terminal-only` removes intermediate body/joint tracking preferences and applies pose tracking only during the final 0.4 s of the optimization horizon. This avoids forcing an executed robot to track an infeasible intermediate path. Clearance, actual range/speed penalties and final velocity checks still apply. `--reference-seed` fits the original hash-verified release action sequence, preceded by a smooth crouch-to-standing target preparation, to the sagittal correction basis. The reference is used for **initialization**, with fit RMS and its hash recorded; no neural weights are trained or replaced. Fitting averages left/right sagittal targets and does not exactly reproduce the full hybrid CapturePolicy.
+
+```bash
+# Full-window continuation from the longer prefix.
+python scripts/optimize_go2_clearance.py \
+  --candidate output/trajectory_refine_restore_v2 \
+  --output output/calf_full_NEW --knots 6 --buffer .04 --weight 10000 \
+  --pose-weight 1000 --offset-bound 1.0 \
+  --initial-offsets output/calf_extended_NEW/shooting_commands.npz \
+  --evaluations 25 --max-seconds 150
+
+# Alternative reference initialization and terminal-only pose cost.
+python scripts/optimize_go2_clearance.py \
+  --candidate output/trajectory_refine_restore_v2 \
+  --output output/calf_reference_NEW --knots 8 --buffer .04 --weight 10000 \
+  --pose-weight 1000 --offset-bound 1.0 --target-margin .08 --terminal-only \
+  --reference-seed artifacts/handstand_reference/trajectory.npz --preparation .5 \
+  --evaluations 20 --max-seconds 150
+```
+
+The final reference-fit / terminal-only trial used eight correction knots, a 0.08 rad target margin and the same 150-second simulation budget. Its release-action fit RMS was 0.198225 rad across the averaged sagittal channels. It still failed: first rear-calf contact at **1.482 s**, zero qualifying hold, and approximately 62 degrees orientation error at the end of its diagnostic optimization window. It is not selected over the collision-free margin trial. Removing intermediate tracking preferences and changing the initialization were explored without claiming success.
+
+Final software validation: **65 tests passed, zero failed, zero skipped** across both trajectory suites and the existing replay, robustness, takeoff and capture suites. Ten existing TorchScript deprecation warnings were reported. New checks cover calf surface geometry, between-node constraints, nonzero objective/gradient reporting, deterministic native simulation, full versus prefix horizons, action bounds/slew, inward joint margins, invalid command replay and release hash validation. Ruff lint/format and Git whitespace checks pass. The final CLI smoke test also completed with an experimental/nonexportable report.
+
+The exact archived input candidate SHA256 is `d9304a374482c966cf1b86f507e8596c9da7adbe2d74906e57780d8eaf93c3f9`. Per-run command archives have their own hashes and are tagged separately from this source mesh. For reproducibility, the Downloads review ZIP contains that archived input/report and the collision-free **0.08 rad target-margin** commands/report. It contains **no accepted handstand controller**, checkpoint replacement or hardware authorization. Its `reproduce.txt` runs a fixed-parameter software replay through the current CLI; expected behavior is no illegal contact and zero handstand hold, rather than a passing handstand score.
+
+Additional exploratory warm-start probes used the unchanged release actions after 0.5/1/2/3-second smooth crouch-to-standing preparations. They all failed in native dynamics (first calf contacts at total times 2.612/2.798/3.836/4.758 s). Separate probes using the full hash-verified CapturePolicy after 0.5/1-second preparations failed with head contact at total times 2.586/3.012 s, and zero qualifying hold. These are new crouch-start conditions, **not** the documented standing-start 67/100 reproduction. A source report's inherited `standing_start` field does not describe these custom initialization probes. No original controller parameters were changed.
+
+The early geometric-cost scratch report initially logged `task_cost=0` even though the clearance residual was included inside restoration; objective reporting was corrected, and tested against the actual half-squared clearance-residual norm. It does not change the measured failure outcome.
+
+No shooting archive should be renamed to the staff `position_reference.npz` format or loaded through the deployment hooks. Those archives bypass neither the mesh/export gates nor staff approval. All research logs stay outside Git. The remaining problem is to attain and stabilize the required handstand while retaining the contact-free, range-legal behavior; increasing a single clearance weight is demonstrably insufficient.

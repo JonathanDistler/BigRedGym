@@ -355,3 +355,156 @@ def test_restoration_exact_dynamics_and_audit(static_problem):
     assert audit["objective"] == 0
     with pytest.raises(ValueError, match="restoration"):
         solve(p, initial, max_iterations=1, eliminate_dynamics=True)
+
+
+def test_calf_surface_uses_full_collision_geometry(static_problem):
+    from gym.envs.go2.handstand_replay import clearance
+
+    r = static_problem.robot
+    r.set(static_problem.start)
+    expected = [min(clearance(r.m, r.d, g) for g in gs) for gs in r.calf_geoms]
+    np.testing.assert_allclose(r.calf_heights(), expected)
+    # Cylinder-center height is insufficient to detect the lowest calf surface.
+    centers = [min(r.d.geom_xpos[g, 2] for g in gs) for gs in r.calf_geoms]
+    assert np.all(r.calf_heights() < centers)
+
+
+def test_swept_calf_constraints_and_penalty(endpoints):
+    from dataclasses import replace
+
+    _, (start, _, anchors, nominal) = endpoints
+    cfg = StaticSettings(
+        intervals=2,
+        duration=0.04,
+        sweep_substeps=2,
+        calf_clearance=0.01,
+        calf_buffer=0.12,
+        calf_penalty_weight=100,
+    )
+    p = Problem(Robot(cfg), start, start, anchors, nominal)
+    x = p.seed(static=True)
+    samples = list(p.calf_samples(x))
+    assert len(samples) == 7
+    assert samples[1][1] == (0, 1)
+    assert p.calf_penalty_sparsity(x).shape == (28, len(x))
+    assert np.linalg.norm(p.calf_penalty(x)) > 0
+    assert p.objective(x) == pytest.approx(0.5 * np.sum(p.calf_penalty(x) ** 2))
+    assert p.objective_gradient(x)[2] < 0
+    groups = p.audit(x)["groups"]
+    assert groups["calf_surface_clearance"]["maximum_raw_violation"] == 0
+    rows = p.unpack(x).copy()
+    rows[1, Y][2] -= 0.15
+    assert (
+        p.audit(rows.ravel())["groups"]["calf_surface_clearance"][
+            "maximum_raw_violation"
+        ]
+        > 0.04
+    )
+    assert np.linalg.norm(p.calf_penalty(rows.ravel())) > np.linalg.norm(
+        p.calf_penalty(x)
+    )
+    for kwargs in [
+        {"sweep_substeps": -1},
+        {"calf_penalty_weight": -1},
+        {"calf_clearance": 0.2, "calf_buffer": 0.1},
+    ]:
+        with pytest.raises(ValueError):
+            replace(cfg, **kwargs)
+
+
+def test_native_shooting_targets_and_determinism(static_problem, tmp_path):
+    from experiments.trajectory_optimization.shooting import NativeShooting
+
+    _save_static_candidate(tmp_path, static_problem)
+    p = NativeShooting(tmp_path, knots=2, tail=0)
+    grid, targets = p.commands(np.full(8, 0.6))
+    np.testing.assert_array_equal(targets[0], p.saved["targets"][0])
+    assert np.all(targets >= p.robot.bounds[:, 0])
+    assert np.all(targets <= p.robot.bounds[:, 1])
+    assert np.all(abs(np.diff(targets, axis=0)) <= 0.7 * p.robot.speed * 0.02 + 1e-12)
+    r1, t1, c1 = p.simulate(np.zeros(8))
+    r2, t2, c2 = p.simulate(np.zeros(8))
+    np.testing.assert_array_equal(r1, r2)
+    np.testing.assert_array_equal(t1, t2)
+    assert c1 == c2
+    assert len(grid) == 2 and np.isfinite(r1).all()
+    planned = p.planned_clearance()
+    assert planned.shape[1] == 5 and planned[0, 0] == 0
+    assert planned[-1, 0] == pytest.approx(0.04)
+    assert np.all(planned[:, 1:] > 0.07)
+    with pytest.raises(ValueError):
+        p.commands(np.full(8, np.nan))
+
+
+def test_command_replay_rejects_unsafe_override(static_problem, tmp_path):
+    from experiments.trajectory_optimization.validation import replay, position_commands
+
+    _save_static_candidate(tmp_path, static_problem)
+    grid, commands = position_commands(
+        {
+            "time": static_problem.cfg.times,
+            "targets": np.array(
+                [
+                    static_problem.target(row)
+                    for row in static_problem.unpack(static_problem.seed(static=True))
+                ]
+            ),
+        },
+        static_problem.robot.speed,
+        5.0,
+    )
+    commands[1, 0] = 100
+    with pytest.raises(ValueError, match="limits"):
+        replay(tmp_path, command_override=(grid, commands))
+    with pytest.raises(ValueError, match="timing"):
+        replay(tmp_path, command_override=(grid + 0.001, commands))
+
+
+def test_native_prefix_horizon_does_not_change_full_command_trial(
+    static_problem, tmp_path
+):
+    from experiments.trajectory_optimization.shooting import NativeShooting
+
+    _save_static_candidate(tmp_path, static_problem)
+    p = NativeShooting(tmp_path, knots=2, tail=0, horizon=0.02)
+    residual, trace, _ = p.simulate(np.zeros(8))
+    assert trace.shape[0] == 1
+    grid, commands = p.commands(np.zeros(8), hold_seconds=5.0)
+    assert grid[-1] >= 5
+    assert commands.shape == (len(grid), 12)
+    with pytest.raises(ValueError, match="Horizon"):
+        NativeShooting(tmp_path, knots=2, tail=0, horizon=0.05)
+    with pytest.raises(ValueError, match="initial"):
+        p.optimize(max_evaluations=1, initial=np.full(8, np.nan))
+
+
+def test_shooting_joint_margin_strengthens_command_limits(static_problem, tmp_path):
+    from experiments.trajectory_optimization.shooting import NativeShooting
+
+    _save_static_candidate(tmp_path, static_problem)
+    p = NativeShooting(tmp_path, knots=2, tail=0, target_margin=0.04)
+    _, targets = p.commands(np.full(8, 1.0))
+    assert np.all(targets >= p.robot.bounds[:, 0] + 0.04)
+    assert np.all(targets <= p.robot.bounds[:, 1] - 0.04)
+    np.testing.assert_array_equal(targets[0], p.saved["targets"][0])
+    with pytest.raises(ValueError, match="margin"):
+        NativeShooting(tmp_path, target_margin=-0.1)
+    with pytest.raises(ValueError, match="margin"):
+        NativeShooting(tmp_path, target_margin=2.0)
+
+
+def test_reference_seed_is_hash_locked_and_bounded(static_problem, tmp_path):
+    from experiments.trajectory_optimization.shooting import NativeShooting
+
+    _save_static_candidate(tmp_path, static_problem)
+    p = NativeShooting(tmp_path, knots=3, target_margin=0.08, terminal_only=True)
+    initial, meta = p.reference_seed(REFERENCE, bound=0.5)
+    assert initial.shape == (12,)
+    assert np.isfinite(initial).all() and np.max(abs(initial)) <= 0.5
+    assert meta["fit_rms_rad"] >= 0
+    _, commands = p.commands(initial)
+    np.testing.assert_array_equal(commands[0], p.saved["targets"][0])
+    invalid = tmp_path / "wrong_reference.npz"
+    invalid.write_bytes(b"wrong release asset")
+    with pytest.raises(ValueError, match="SHA256"):
+        p.reference_seed(invalid)
