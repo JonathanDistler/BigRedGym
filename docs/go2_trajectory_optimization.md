@@ -597,3 +597,13 @@ Additional exploratory warm-start probes used the unchanged release actions afte
 The early geometric-cost scratch report initially logged `task_cost=0` even though the clearance residual was included inside restoration; objective reporting was corrected, and tested against the actual half-squared clearance-residual norm. It does not change the measured failure outcome.
 
 No shooting archive should be renamed to the staff `position_reference.npz` format or loaded through the deployment hooks. Those archives bypass neither the mesh/export gates nor staff approval. All research logs stay outside Git. The remaining problem is to attain and stabilize the required handstand while retaining the contact-free, range-legal behavior; increasing a single clearance weight is demonstrably insufficient.
+
+## 21. TA-informed trajectory/model-based continuation
+
+The new branch `experiment/trajectory_optimization_ta` preserves this constrained
+formulation and adds native preparation optimization plus a separate model-derived
+43-input trajectory tracker. See [the continuation report](go2_trajectory_ta_followup.md)
+for equations, independent nominal success, failed perturbation/noise/crouch tests,
+float32 command effects, original actuator-envelope mismatch, and Cornell loading
+requirements. These new native experiments are not substituted for this document's
+hard-constrained NLP/export certificate.
