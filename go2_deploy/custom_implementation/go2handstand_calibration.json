@@ -1,0 +1,78 @@
+{
+  "source": "model_and_ta_estimates",
+  "calibrated": false,
+  "initial_height": 0.3413013268255194,
+  "tick_period_s": 0.001,
+  "max_lowstate_age_s": 0.015,
+  "max_command_state_age_s": 0.02,
+  "stationary_samples": 100,
+  "observer": {
+    "kind": "contact",
+    "max_interval": 0.012,
+    "max_age": 0.015,
+    "contact_threshold": 10.0
+  },
+  "imu": {
+    "body_from_imu": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "world_alignment": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "lever_arm_body": [
+      -0.02557,
+      0.0,
+      0.04232
+    ],
+    "accel_bias_imu": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "gyro_bias_imu": [
+      0.0,
+      -0.009,
+      0.0
+    ],
+    "accel_scale": 1.0272251308900524,
+    "max_interval": 0.012,
+    "alpha_tau": 0.02,
+    "stationary_gyro_limit": 0.04
+  },
+  "requires_staff_confirmation": [
+    "Confirm model vs physical mounting and world alignment/yaw",
+    "Initial height is the model base origin, not COM or body surface",
+    "Confirm provisional 0.001 s tick units; receipt rate is insufficient",
+    "Confirm foot-force validity, units, 10 raw-unit threshold, FR/FL/RR/RL order and non-slip level ground",
+    "Rest norm 9.55 is a scale hypothesis; biases need stationary samples",
+    "Verify timing tails, motor limits and recovery"
+  ]
+}

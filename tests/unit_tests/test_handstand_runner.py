@@ -246,8 +246,9 @@ def test_bundle_loads_through_cornell_loader_and_checks_calibration(
     assert cfg.kp == 60 and cfg.kd == 3
     assert policy(torch.zeros(47)).shape == (12,)
     monkeypatch.delenv("GO2_HANDSTAND_CALIBRATION")
-    with pytest.raises(ValueError, match="CALIBRATION"):
-        load_bundle(folder)
+    _, model_cfg = load_bundle(folder)
+    assert model_cfg.custom_runtime[3]["calibrated"] is False
+    assert model_cfg.custom_runtime[3]["source"] == "model_and_ta_estimates"
 
 
 def test_template_loader_rejects_traversal():
@@ -553,3 +554,269 @@ def test_recorded_sensor_messages_match_47_channel_contract(
     for name, value in errors.items():
         record_property("maximum_" + name + "_error", value)
     print("RUNNER_PARITY", json.dumps(errors))
+
+
+def test_model_calibration_is_filled_but_not_hardware_verified(assets):
+    config = team.model_calibration(assets[2])
+    committed = json.loads(
+        Path(
+            "go2_deploy/custom_implementation/go2handstand_calibration.json"
+        ).read_text()
+    )
+    assert committed == config
+    assert config["calibrated"] is False
+    assert config["source"] == "model_and_ta_estimates"
+    assert 0.34 < config["initial_height"] < 0.35
+    np.testing.assert_array_equal(config["imu"]["body_from_imu"], np.eye(3))
+    np.testing.assert_allclose(config["imu"]["lever_arm_body"], [-0.02557, 0, 0.04232])
+    assert config["imu"]["accel_scale"] == pytest.approx(9.81 / 9.55)
+    assert config["observer"]["kind"] == "contact"
+    assert config["observer"]["max_interval"] == 0.012
+    assert config["max_lowstate_age_s"] == 0.015
+
+
+def test_unverified_model_config_loads_but_cannot_activate(controller, assets):
+    controller.handstand_calibration = team.model_calibration(assets[2])
+    receive(controller, 1000, 10.0)
+    with pytest.raises(ValueError, match="staff calibration confirmation"):
+        team.update_custom_buffers(controller, 10.0)
+    assert not controller.handstand_session.active
+
+
+def relaxed(c):
+    c.handstand_calibration = json.loads(json.dumps(c.handstand_calibration))
+    c.handstand_calibration["max_lowstate_age_s"] = 0.015
+    c.handstand_calibration["imu"]["max_interval"] = 0.012
+    c.handstand_session.observer_options = {"max_interval": 0.012, "max_age": 0.015}
+
+
+def test_10_6ms_receipt_age_and_source_gap_are_bounded_and_counted(controller):
+    c = controller
+    relaxed(c)
+    start(c)
+    publish(c)
+    receive(c, 1010, 10.010)
+    team.update_custom_buffers(c, 10.0206)
+    assert c.handstand_session.estimator.samples == 1
+    assert c.handstand_session.estimator.timestamp == pytest.approx(0.010)
+    assert c.handstand_gap_intervals == 1
+    assert c.handstand_session.estimator.gap_intervals == 1
+    assert c.handstand_session.path.step == 1
+    assert np.isfinite(c.handstand_snapshot).all()
+
+
+@pytest.mark.parametrize("failure", ["source_gap", "receipt_age", "frozen_tick"])
+def test_relaxed_limits_still_reject_missing_or_frozen_stream(controller, failure):
+    c = controller
+    relaxed(c)
+    start(c)
+    publish(c)
+    if failure == "source_gap":
+        receive(c, 1013, 10.02)
+        match, now = "Missing or out-of-order", 10.02
+    elif failure == "receipt_age":
+        receive(c, 1004, 10.004)
+        match, now = "Stale", 10.020
+    else:
+        receive(c, 1000, 10.020)
+        match, now = "distinct IMU", 10.020
+    with pytest.raises(ValueError, match=match):
+        team.update_custom_buffers(c, now)
+    assert c.handstand_session.path.step == 1
+    assert not c.handstand_session.active
+
+
+def stationary_readings(c, moving=False, missing_loads=False):
+    rows = []
+    rng = np.random.default_rng(4110)
+    for k in range(125):
+        msg = message(c, 1000 + 2 * k)
+        msg.foot_force = [35, 35, 35, 35]
+        msg.imu_state.gyroscope = np.array([0.0, -0.009, 0.0]) + rng.normal(0, 0.007, 3)
+        msg.imu_state.accelerometer = np.array([0.05, -0.05, 9.65]) + rng.normal(
+            0, 0.03, 3
+        )
+        if moving:
+            msg.motor_state[0].dq = 0.2
+        packet = team.read_lowstate(msg)
+        if missing_loads:
+            packet = (*packet[:-1], None)
+        rows.append((10 + k * 0.002, packet))
+    return rows
+
+
+def test_stationary_bias_estimate_uses_actual_sensor_samples(controller):
+    parameters = dict(controller.handstand_calibration["imu"], accel_scale=9.81 / 9.55)
+    result = team.calibrate_stationary(parameters, stationary_readings(controller))
+    np.testing.assert_allclose(result["gyro_bias_imu"], [0, -0.009, 0], atol=0.002)
+    np.testing.assert_allclose(result["accel_bias_imu"], [0.05, -0.05, 0.1], atol=0.01)
+
+
+@pytest.mark.parametrize("failure", ["short", "moving", "loads", "timestamps"])
+def test_stationary_calibration_refuses_unreliable_measurements(controller, failure):
+    rows = stationary_readings(
+        controller, moving=failure == "moving", missing_loads=failure == "loads"
+    )
+    if failure == "short":
+        rows = rows[:99]
+    elif failure == "timestamps":
+        rows[-1] = (rows[-2][0], rows[-1][1])
+    with pytest.raises(ValueError):
+        team.calibrate_stationary(controller.handstand_calibration["imu"], rows)
+
+
+def test_contact_kinematics_bounds_drift_and_requires_measured_loads(assets):
+    _, policy, trajectory, model, *_ = assets
+    data = __import__("mujoco").MjData(model)
+    __import__("mujoco").mj_setState(
+        model,
+        data,
+        trajectory["initial_state"],
+        __import__("mujoco").mjtState.mjSTATE_INTEGRATION,
+    )
+    session = team.Session(
+        policy,
+        trajectory,
+        model,
+        {"kind": "contact", "max_interval": 0.012, "max_age": 0.015},
+    )
+    height = float(data.qpos[2])
+    session.activate(0, height + 0.025, calibrated=True)
+    q, dq = data.qpos[session.estimator.qids], np.zeros(12)
+    for i in range(1001):
+        session.ingest(
+            i * 0.002, [0, 0, 10.06], [1, 0, 0, 0], np.zeros(3), q, dq, [35] * 4
+        )
+    assert session.estimator.corrections > 990
+    assert abs(session.estimator.height - height) < 0.003
+    assert abs(session.estimator.velocity[2]) < 0.011
+    with pytest.raises(ValueError, match="measured foot loads"):
+        session.ingest(2.002, [0, 0, 9.81], [1, 0, 0, 0], np.zeros(3), q, dq)
+    assert not session.active
+
+
+def test_no_contact_does_not_invent_a_ground_anchor(assets):
+    model = assets[3]
+    e = team.ContactEstimator(model, 0.34, 0, calibrated=True)
+    for i in range(1, 101):
+        e.update(i * 0.002, [0, 0, 10.06], [1, 0, 0, 0])
+        e.correct_contacts(
+            [1, 0, 0, 0],
+            np.zeros(3),
+            assets[2]["initial_target"],
+            np.zeros(12),
+            np.zeros(4),
+        )
+    assert e.corrections == 0
+    assert e.velocity[2] == pytest.approx(0.05)
+
+
+def test_runner_collects_and_consumes_stationary_samples_without_driver(controller):
+    c = controller
+    c.handstand_calibration = json.loads(json.dumps(c.handstand_calibration))
+    c.handstand_calibration["stationary_samples"] = 100
+    c.handstand_calibration["observer"] = {"contact_threshold": 10.0}
+    c.handstand_calibration["imu"]["accel_scale"] = 9.81 / 9.55
+    c._state = State.INTERMEDIATE
+    for t, packet in stationary_readings(c):
+        tick, quat, omega, force, q, dq, loads = packet
+        msg = NS(
+            tick=tick,
+            imu_state=NS(quaternion=quat, gyroscope=omega, accelerometer=force),
+            motor_state=[
+                NS(q=float(a), dq=float(b))
+                for a, b in zip(q[team.PERMUTATION], dq[team.PERMUTATION])
+            ],
+            foot_force=loads[[1, 0, 3, 2]],
+        )
+        with c.last_lowstate_msg_lock:
+            c.last_lowstate_msg = msg
+            c.last_lowstate_received_time = t
+            team.on_lowstate_msg(c, msg, t)
+    assert len(c.handstand_stationary_rx) == 125
+    c._state = State.CUSTOM_CTRL
+    msg.tick = 1250
+    with c.last_lowstate_msg_lock:
+        c.last_lowstate_received_time = 10.25
+        team.on_lowstate_msg(c, msg, 10.25)
+    team.update_custom_buffers(c, 10.25)
+    np.testing.assert_allclose(
+        c.handstand_effective_imu["accel_bias_imu"], [0.05, -0.05, 0.1], atol=0.01
+    )
+    assert not c.handstand_stationary_rx
+    assert c.handstand_session.active
+
+
+@pytest.mark.parametrize("source_interval", [0.0106, 0.012])
+def test_explicit_tick_units_accept_10_6_and_12ms_intervals(
+    controller, source_interval
+):
+    c = controller
+    relaxed(c)
+    c.handstand_calibration["tick_period_s"] = 0.0001
+    start(c)
+    publish(c)
+    receive(c, 1000 + round(source_interval / 0.0001), 10 + source_interval)
+    team.update_custom_buffers(c, 10.02)
+    assert c.handstand_session.estimator.samples == 1
+    assert c.handstand_session.estimator.timestamp == pytest.approx(source_interval)
+    assert c.handstand_gap_intervals == 1
+
+
+def test_sensor_estimator_uses_only_kinematics_not_dynamics_or_contacts(
+    assets, monkeypatch
+):
+    import mujoco
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Deployable observer queried simulator dynamics/contact data")
+
+    monkeypatch.setattr(mujoco, "mj_forward", forbidden)
+    monkeypatch.setattr(mujoco, "mj_step", forbidden)
+    monkeypatch.setattr(mujoco, "mj_contactForce", forbidden)
+    _, policy, trajectory, model, *_ = assets
+    session = team.Session(policy, trajectory, model, {"kind": "contact"})
+    session.activate(0, 0.34, calibrated=True)
+    for i in range(11):
+        session.ingest(
+            i * 0.002,
+            [0, 0, 9.81],
+            [1, 0, 0, 0],
+            np.zeros(3),
+            trajectory["initial_target"],
+            np.zeros(12),
+            [35] * 4,
+        )
+    assert np.isfinite(session.snapshot(0.02)).all()
+
+
+def test_callback_after_cycle_entry_uses_fresh_runner_clock(controller):
+    c = controller
+    relaxed(c)
+    start(c)
+    publish(c)
+    for i in range(1, 11):
+        receive(c, 1000 + 2 * i, 10 + i * 0.002 + 0.0005)
+    c.lowstate_clock = lambda: 10.021
+    team.update_custom_buffers(c, 10.020)
+    assert c.handstand_session.active
+    assert c.handstand_session.estimator.samples == 10
+
+
+@pytest.mark.parametrize("age, accepted", [(0.020, True), (0.02001, False)])
+def test_command_age_budget_covers_processing_but_is_not_unbounded(
+    controller, age, accepted
+):
+    c = controller
+    relaxed(c)
+    c.handstand_calibration["max_command_state_age_s"] = 0.020
+    start(c)
+    c.lowstate_clock = lambda: 10 + age
+    if accepted:
+        publish(c)
+        assert c.handstand_session.path.step == 1
+    else:
+        with pytest.raises(ValueError, match="snapshot exceeded age"):
+            publish(c)
+        assert c.handstand_session.path.step == 0
+        assert not c.handstand_session.active

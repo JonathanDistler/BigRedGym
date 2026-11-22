@@ -79,6 +79,7 @@ class MainController:
         # LowState_: last recieved lowstate msg
         self.last_lowstate_msg = None
         self.last_lowstate_received_time = None
+        self.lowstate_clock = time.monotonic
         self.last_lowstate_msg_lock = threading.Lock()
 
         # torch tensor: obs vector computed from last_lowstate_msg

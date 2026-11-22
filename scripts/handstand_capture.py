@@ -15,7 +15,12 @@ import numpy as np
 import mujoco
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from go2_deploy.custom_implementation.go2handstand import load_assets, Session
+from go2_deploy.custom_implementation.go2handstand import (
+    load_assets,
+    Session,
+    IMUCalibration,
+    calibrate_stationary,
+)
 from gym.envs.go2.handstand_replay import (
     Replay,
     build_model,
@@ -142,7 +147,7 @@ class Presentation:
         self.stack.close()
 
 
-def trial(policy, trajectory, seed, perturbed, presentation=None):
+def trial(policy, trajectory, seed, perturbed, presentation=None, sensor_options=None):
     r = Replay(build_model(), trajectory)
     rng = np.random.default_rng(seed)
     r.d.qpos[r.qids] += rng.uniform(
@@ -153,7 +158,112 @@ def trial(policy, trajectory, seed, perturbed, presentation=None):
     )
     mujoco.mj_forward(r.m, r.d)
     r.anchor = r.d.geom_xpos[r.foot_geoms[:2], :2].copy()
-    session = Session(policy, trajectory, build_model())
+    opts = dict(sensor_options or {})
+    observer = opts.get("observer", "inertial")
+    observer_options = (
+        {"kind": observer, "max_interval": 0.012, "max_age": 0.015} if opts else None
+    )
+    session = Session(policy, trajectory, build_model(), observer_options)
+    sensor_rng = np.random.default_rng(seed + 8000000)
+    calibration = IMUCalibration(
+        np.eye(3),
+        np.eye(3),
+        opts.get("lever", [0, 0, 0]),
+        [0, 0, 0],
+        [0, -0.009, 0] if opts.get("ta") else [0, 0, 0],
+        accel_scale=9.81 / 9.55 if opts.get("scale_correction") else 1.0,
+        max_interval=0.012,
+        alpha_tau=0.02,
+        stationary_gyro_limit=0.04,
+    )
+    if opts.get("stationary_calibration"):
+        # Synthetic stationary telemetry; biases are estimated from samples.
+        readings = []
+        calibration_rng = np.random.default_rng(seed + 9000000)
+        for n in range(125):
+            force = np.array([0, 0, 9.81])
+            gyro = np.zeros(3)
+            if opts.get("ta"):
+                force = force * opts.get("scale", 9.55 / 9.81) + opts.get(
+                    "bias", [0.05, -0.05, 0.1]
+                )
+                force += calibration_rng.normal(0, opts.get("accel_noise", 0.03), 3)
+                gyro = np.array([0, -0.009, 0]) + calibration_rng.normal(
+                    0, opts.get("gyro_noise", 0.007), 3
+                )
+            readings.append(
+                (
+                    n * 0.002,
+                    (
+                        2 * n,
+                        np.array([1.0, 0, 0, 0]),
+                        gyro,
+                        force,
+                        trajectory["initial_target"].copy(),
+                        np.zeros(12),
+                        np.full(4, r.weight / 4),
+                    ),
+                )
+            )
+        parameters = dict(
+            body_from_imu=np.eye(3),
+            world_alignment=np.eye(3),
+            lever_arm_body=opts.get("lever", [0, 0, 0]),
+            accel_bias_imu=[0, 0, 0],
+            gyro_bias_imu=[0, -0.009, 0] if opts.get("ta") else [0, 0, 0],
+            accel_scale=9.81 / 9.55 if opts.get("scale_correction") else 1.0,
+            max_interval=0.012,
+            alpha_tau=0.02,
+            stationary_gyro_limit=0.04,
+        )
+        calibration = IMUCalibration(**calibrate_stationary(parameters, readings))
+    drift = []
+    dropped = 0
+    physics_step = 0
+
+    def measured_loads():
+        # Synthetic generator only; deployed actors cannot query contacts.
+        loads = np.zeros(4)
+        for j in range(r.d.ncon):
+            contact = r.d.contact[j]
+            for i, g in enumerate(r.foot_geoms):
+                if (contact.geom1 == 0 and contact.geom2 == g) or (
+                    contact.geom2 == 0 and contact.geom1 == g
+                ):
+                    wrench = np.zeros(6)
+                    mujoco.mj_contactForce(r.m, r.d, j, wrench)
+                    loads[i] += max(0, wrench[0])
+        return loads
+
+    def ingest(force, alpha, drop=False):
+        omega = r.d.qvel[3:6].copy()
+        lever = np.array(opts.get("lever", [0, 0, 0]))
+        raw = force + np.cross(alpha, lever) + np.cross(omega, np.cross(omega, lever))
+        if opts.get("ta"):
+            raw = raw * opts.get("scale", 9.55 / 9.81) + opts.get(
+                "bias", [0.05, -0.05, 0.1]
+            )
+            raw += sensor_rng.normal(0, opts.get("accel_noise", 0.03), 3)
+            omega += [0, -0.009, 0] + sensor_rng.normal(
+                0, opts.get("gyro_noise", 0.007), 3
+            )
+        # Generate noise at every physical sample, even if transport drops it,
+        # so paired loss/no-loss runs share the same timestamp-indexed noise.
+        if drop:
+            return
+        quat = r.d.qpos[3:7].copy()
+        if opts:
+            quat, omega, raw = calibration.correct(float(r.d.time), quat, omega, raw)
+        session.ingest(
+            float(r.d.time),
+            raw,
+            quat,
+            omega,
+            r.d.qpos[r.qids],
+            r.d.qvel[r.vids],
+            measured_loads() if observer == "contact" else None,
+        )
+
     # Known nominal standing calibration, not simulator COM/velocity input.
     nominal_data = mujoco.MjData(r.m)
     mujoco.mj_setState(
@@ -162,15 +272,22 @@ def trial(policy, trajectory, seed, perturbed, presentation=None):
         trajectory["initial_state"],
         mujoco.mjtState.mjSTATE_INTEGRATION,
     )
-    session.activate(0.0, float(nominal_data.qpos[2]), calibrated=True)
-    session.ingest(
+    session.activate(
         0.0,
-        np.zeros(3),
-        r.d.qpos[3:7],
-        r.d.qvel[3:6],
-        r.d.qpos[r.qids],
-        r.d.qvel[r.vids],
+        float(nominal_data.qpos[2]) + opts.get("height_error", 0.0),
+        calibrated=True,
     )
+    if opts:
+        ingest(np.array([0, 0, 9.81]), np.zeros(3))
+    else:
+        session.ingest(
+            0.0,
+            np.zeros(3),
+            r.d.qpos[3:7],
+            r.d.qvel[3:6],
+            r.d.qpos[r.qids],
+            r.d.qvel[r.vids],
+        )
     view = presentation(r) if presentation else None
     cancelled = False
     steps = 0
@@ -180,11 +297,20 @@ def trial(policy, trajectory, seed, perturbed, presentation=None):
             if view and not view.sync():
                 cancelled = True
                 break
+            mujoco.mj_subtreeVel(r.m, r.d)
+            observed = session.snapshot(float(r.d.time))
+            drift.append(
+                np.r_[
+                    observed[43] * 0.6 - r.d.subtree_com[r.base, 2],
+                    observed[44:47] - r.d.subtree_linvel[r.base],
+                ]
+            )
             _, target = session.propose(k * CONTROL_DT)
-            # In simulation the bounded target is applied immediately, before stepping.
+            # Explicit software sink, never a hardware acknowledgement.
             r.target = target.copy()
             session.acknowledge(target)
             for _ in range(round(CONTROL_DT / PHYSICS_DT)):
+                old_omega = r.d.qvel[3:6].copy()
                 velocity = r.d.qvel[r.vids].copy()
                 torque = np.clip(
                     KP * (target - r.d.qpos[r.qids]) - KD * velocity,
@@ -199,14 +325,24 @@ def trial(policy, trajectory, seed, perturbed, presentation=None):
                 mujoco.mj_forward(r.m, r.d)
                 rotation = r.d.xmat[r.base].reshape(3, 3)
                 force = rotation.T @ (acceleration - r.m.opt.gravity)
-                session.ingest(
-                    float(r.d.time),
-                    force,
-                    r.d.qpos[3:7],
-                    r.d.qvel[3:6],
-                    r.d.qpos[r.qids],
-                    r.d.qvel[r.vids],
+                physics_step += 1
+                drop = (
+                    opts.get("drop_count", 0)
+                    and 1 <= physics_step % 100 <= opts["drop_count"]
                 )
+                if drop:
+                    dropped += 1
+                if opts:
+                    ingest(force, (r.d.qvel[3:6] - old_omega) / PHYSICS_DT, drop=drop)
+                elif not drop:
+                    session.ingest(
+                        float(r.d.time),
+                        force,
+                        r.d.qpos[3:7],
+                        r.d.qvel[3:6],
+                        r.d.qpos[r.qids],
+                        r.d.qvel[r.vids],
+                    )
                 r.measure(velocity)
                 if view:
                     view.capture()
@@ -225,6 +361,15 @@ def trial(policy, trajectory, seed, perturbed, presentation=None):
     )
     return dict(
         seed=seed,
+        observer=observer,
+        sensor_options=opts,
+        dropped_measurements=dropped,
+        gap_intervals=session.estimator.gap_intervals,
+        contact_corrections=getattr(session.estimator, "corrections", 0),
+        com_error_rms=np.sqrt(np.mean(np.array(drift) ** 2, axis=0)).tolist()
+        if drift
+        else None,
+        com_error_max=np.max(abs(np.array(drift)), axis=0).tolist() if drift else None,
         condition={"joint_position": 0.003, "joint_velocity": 0.03}
         if perturbed
         else {},
@@ -270,6 +415,33 @@ def main():
         nargs="+",
         help="Explicit held-out seeds, plus the usual nominal trial",
     )
+    p.add_argument("--observer", choices=["inertial", "contact"], default="inertial")
+    p.add_argument("--sensor-profile", choices=["ideal", "ta"], default="ideal")
+    p.add_argument("--accel-scale", type=float, default=9.55 / 9.81)
+    p.add_argument(
+        "--accel-bias",
+        nargs=3,
+        type=float,
+        default=[0.05, -0.05, 0.1],
+        help="Assumed residual bias stress, not a TA measurement (m/s²)",
+    )
+    p.add_argument("--gyro-noise", type=float, default=0.007)
+    p.add_argument("--accel-noise", type=float, default=0.03)
+    p.add_argument("--scale-correction", action="store_true")
+    p.add_argument("--stationary-calibration", action="store_true")
+    p.add_argument("--initial-height-error", type=float, default=0.0)
+    p.add_argument(
+        "--imu-drop-count",
+        type=int,
+        choices=range(6),
+        default=0,
+        help="Drop N consecutive samples per 200 ms; N=5 gives 12 ms intervals",
+    )
+    p.add_argument(
+        "--model-imu",
+        action="store_true",
+        help="Generate IMU lever-arm acceleration using the URDF mounting",
+    )
     p.add_argument("--viewer", action="store_true")
     p.add_argument(
         "--video",
@@ -299,7 +471,29 @@ def main():
             if a.video or a.viewer
             else None
         )
-        row = trial(policy, trajectory, seed, i > 0, factory)
+        opts = None
+        if (
+            a.sensor_profile != "ideal"
+            or a.observer != "inertial"
+            or a.imu_drop_count
+            or a.initial_height_error
+            or a.model_imu
+            or a.stationary_calibration
+        ):
+            opts = dict(
+                observer=a.observer,
+                ta=a.sensor_profile == "ta",
+                scale=a.accel_scale,
+                bias=a.accel_bias,
+                gyro_noise=a.gyro_noise,
+                accel_noise=a.accel_noise,
+                scale_correction=a.scale_correction,
+                stationary_calibration=a.stationary_calibration,
+                height_error=a.initial_height_error,
+                drop_count=a.imu_drop_count,
+                lever=[-0.02557, 0, 0.04232] if a.model_imu else [0, 0, 0],
+            )
+        row = trial(policy, trajectory, seed, i > 0, factory, opts)
         if video:
             labelled = video.with_stem(
                 video.stem

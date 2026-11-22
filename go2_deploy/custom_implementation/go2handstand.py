@@ -166,7 +166,15 @@ def rotation(quaternion):
 
 class SensorEstimator:
     def __init__(
-        self, model, initial_height, epoch, *, calibrated=False, joint_order=JOINTS
+        self,
+        model,
+        initial_height,
+        epoch,
+        *,
+        calibrated=False,
+        joint_order=JOINTS,
+        max_interval=0.003,
+        max_age=0.006,
     ):
         if not calibrated or list(joint_order) != JOINTS:
             raise ValueError(
@@ -184,13 +192,18 @@ class SensorEstimator:
         self.velocity = np.zeros(3)
         self.timestamp = float(epoch)
         self.samples = 0
+        self.max_interval, self.max_age = max_interval, max_age
+        if not 0 < max_interval <= 0.012 or not 0 < max_age <= 0.015:
+            raise ValueError("Observer timing bounds exceed reviewed limits")
+        self.gap_intervals = 0
 
     def update(self, timestamp, force, quaternion):
         force = finite(force, (3,))
         r = rotation(quaternion)
         dt = float(timestamp) - self.timestamp
-        if not np.isfinite(dt) or dt <= 0 or dt > 0.003:
+        if not np.isfinite(dt) or dt <= 0 or dt > self.max_interval + 1e-9:
             raise ValueError("Duplicate, out-of-order or missing IMU measurement")
+        self.gap_intervals += int(dt > 0.003 + 1e-9)
         # Semi-implicit Euler, exactly as research InertialObserver at dt=.002.
         self.velocity += dt * (r @ force + [0, 0, -9.81])
         self.height += dt * self.velocity[2]
@@ -201,7 +214,7 @@ class SensorEstimator:
         if (
             not np.isfinite(now)
             or now - self.timestamp < -1e-9
-            or now - self.timestamp > 0.006
+            or now - self.timestamp > self.max_age + 1e-9
         ):
             raise ValueError("Stale or future IMU estimate")
         rotation(quaternion)
@@ -212,7 +225,8 @@ class SensorEstimator:
         d.qvel[:3] = 0
         d.qvel[3:6] = finite(gyro, (3,))
         d.qvel[self.vids] = finite(dq, (12,))
-        mujoco.mj_forward(m, d)  # FK/Jacobian only: never mj_step.
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_comPos(m, d)  # FK/Jacobian only; no collision/dynamics queries.
         jac = np.zeros((3, m.nv))
         mujoco.mj_jacSubtreeCom(m, d, jac, self.base)
         return np.r_[
@@ -242,6 +256,79 @@ class SensorEstimator:
         return result
 
 
+class ContactEstimator(SensorEstimator):
+    """Complementary base-state observer, anchored only by measured loaded feet.
+
+    On level ground, h_base = radius - (R p_foot)_z and
+    v_base = -J_foot(q, R) [0, omega_body, dq] for a non-slipping contact.
+    IMU propagation continues in flight; no simulator contact/COM state is read.
+    Force threshold units and ordering MUST be verified on the physical robot.
+    """
+
+    def __init__(self, *args, contact_threshold=10.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not np.isfinite(contact_threshold) or contact_threshold <= 0:
+            raise ValueError("Invalid measured contact-force threshold")
+        self.contact_threshold = float(contact_threshold)
+        self.feet = [
+            self.model.body(f"{leg}_foot").id for leg in ("FL", "FR", "RL", "RR")
+        ]
+        self.geoms = [
+            int(np.flatnonzero(self.model.geom_bodyid == b)[0]) for b in self.feet
+        ]
+        if any(
+            self.model.geom_type[g] != mujoco.mjtGeom.mjGEOM_SPHERE for g in self.geoms
+        ):
+            raise ValueError("Contact observer requires spherical model feet")
+        self.contact_seconds = np.zeros(4)
+        self.corrections = 0
+        self.last_contact_time = self.timestamp
+
+    def correct_contacts(self, quaternion, gyro, q, dq, loads):
+        loads = finite(loads, (4,))
+        if np.any(loads < 0):
+            raise ValueError("Negative foot load")
+        dt = self.timestamp - self.last_contact_time
+        if dt <= 0:
+            return
+        self.last_contact_time = self.timestamp
+        self.contact_seconds = np.where(
+            loads >= self.contact_threshold, self.contact_seconds + dt, 0
+        )
+        support = np.flatnonzero(self.contact_seconds >= 0.012 - 1e-9)
+        if not len(support):
+            return
+        m, d = self.model, self.data
+        d.qpos[:3] = [0, 0, 0]
+        d.qpos[3:7] = quaternion
+        d.qpos[self.qids] = finite(q, (12,))
+        d.qvel[:3] = 0
+        d.qvel[3:6] = finite(gyro, (3,))
+        d.qvel[self.vids] = finite(dq, (12,))
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_comPos(m, d)  # No collision/dynamics or contact queries.
+        heights, velocities = [], []
+        jac = np.zeros((3, m.nv))
+        for i in support:
+            g = self.geoms[i]
+            heights.append(m.geom_size[g, 0] - d.geom_xpos[g, 2])
+            point = d.geom_xpos[g].copy()
+            point[2] -= m.geom_size[g, 0]
+            mujoco.mj_jac(m, d, jac, None, point, self.feet[i])
+            velocities.append(-jac @ d.qvel)
+        heights, velocities = np.array(heights), np.array(velocities)
+        # Mutually inconsistent loaded feet indicate slip/contact sensor error.
+        if (
+            np.ptp(heights) > 0.04
+            or np.max(np.linalg.norm(velocities - velocities.mean(0), axis=1)) > 0.4
+        ):
+            return
+        # First-order complementary correction; SI state, no policy changes.
+        self.height += (1 - np.exp(-dt / 0.03)) * (heights.mean() - self.height)
+        self.velocity += (1 - np.exp(-dt / 0.04)) * (velocities.mean(0) - self.velocity)
+        self.corrections += 1
+
+
 class IMUCalibration:
     def __init__(
         self,
@@ -250,6 +337,10 @@ class IMUCalibration:
         lever_arm_body,
         accel_bias_imu,
         gyro_bias_imu,
+        accel_scale=1.0,
+        max_interval=0.003,
+        alpha_tau=0.0,
+        stationary_gyro_limit=0.02,
     ):
         self.mount = finite(body_from_imu, (3, 3))
         self.world = finite(world_alignment, (3, 3))
@@ -261,6 +352,18 @@ class IMUCalibration:
         self.lever = finite(lever_arm_body, (3,))
         self.accel_bias = finite(accel_bias_imu, (3,))
         self.gyro_bias = finite(gyro_bias_imu, (3,))
+        self.accel_scale = float(accel_scale)
+        self.max_interval, self.alpha_tau = float(max_interval), float(alpha_tau)
+        if (
+            not 0.8 <= self.accel_scale <= 1.2
+            or not 0 < self.max_interval <= 0.012
+            or not 0 <= self.alpha_tau <= 0.1
+        ):
+            raise ValueError("Invalid IMU scale or timing")
+        self.stationary_gyro_limit = float(stationary_gyro_limit)
+        if not 0 < self.stationary_gyro_limit <= 0.04:
+            raise ValueError("Invalid stationary gyro threshold")
+        self.alpha = np.zeros(3)
         self.previous_time = None
         self.previous_gyro = None
 
@@ -271,16 +374,21 @@ class IMUCalibration:
         alpha = np.zeros(3)
         if self.previous_time is not None:
             dt = timestamp - self.previous_time
-            if dt <= 0 or dt > 0.003:
+            if dt <= 0 or dt > self.max_interval + 1e-9:
                 raise ValueError("Calibration sample gap")
-            alpha = (omega - self.previous_gyro) / dt
+            measured_alpha = (omega - self.previous_gyro) / dt
+            gain = 1.0 if not self.alpha_tau else 1 - np.exp(-dt / self.alpha_tau)
+            self.alpha += gain * (measured_alpha - self.alpha)
+            alpha = self.alpha
         # First sample must be stationary; derivative noise is not filtered.
-        elif np.linalg.norm(omega) > 0.02:
+        elif np.linalg.norm(omega) > self.stationary_gyro_limit:
             raise ValueError("Calibration initialization must be stationary")
         r = self.world @ rotation(quaternion) @ self.mount.T
         q = np.empty(4)
         mujoco.mju_mat2Quat(q, r.ravel())
-        force = self.mount @ (finite(specific_force, (3,)) - self.accel_bias)
+        force = self.mount @ (
+            (finite(specific_force, (3,)) - self.accel_bias) * self.accel_scale
+        )
         force -= np.cross(alpha, self.lever) + np.cross(
             omega, np.cross(omega, self.lever)
         )
@@ -289,8 +397,63 @@ class IMUCalibration:
         return q, omega, force
 
 
+def calibrate_stationary(imu_config, readings, *, samples=100, contact_threshold=10.0):
+    """Estimate biases from a recent, stationary, loaded four-foot stance.
+
+    A single pose does NOT identify both scale and bias: the configured scale is
+    held fixed. Expected specific force is R.T [0,0,g]; no COM truth is used.
+    readings: (receipt_time, raw LowState tuple) in canonical encoder order.
+    """
+    if len(readings) < samples:
+        raise ValueError("Need at least 100 recent stationary LowState samples")
+    readings = readings[-samples:]
+    times = np.array([t for t, _ in readings])
+    if (
+        np.any(np.diff(times) <= 0)
+        or times[-1] - times[0] < 0.15
+        or np.max(np.diff(times)) > 0.012
+    ):
+        raise ValueError("Stationary calibration stream is incomplete")
+    calibration = IMUCalibration(**imu_config)
+    gyro, bias, positions, rotations = [], [], [], []
+    for _, packet in readings:
+        _, quat, omega, force, q, dq, loads = packet
+        if loads is None or np.any(finite(loads, (4,)) < contact_threshold):
+            raise ValueError(
+                "Stationary calibration requires all four measured foot loads"
+            )
+        if (
+            np.max(abs(finite(dq, (12,)))) > 0.1
+            or np.linalg.norm(omega - calibration.gyro_bias) > 0.05
+        ):
+            raise ValueError("Robot must be stationary for calibration")
+        r = calibration.world @ rotation(quat) @ calibration.mount.T
+        expected = calibration.mount.T @ (r.T @ [0, 0, 9.81]) / calibration.accel_scale
+        bias.append(finite(force, (3,)) - expected)
+        gyro.append(finite(omega, (3,)))
+        positions.append(finite(q, (12,)))
+        rotations.append(r)
+    if (
+        np.max(np.ptp(positions, axis=0)) > 0.005
+        or np.max(abs(np.array(rotations) - rotations[0])) > 0.01
+    ):
+        raise ValueError("Pose moved during stationary calibration")
+    if np.max(np.std(gyro, axis=0)) > 0.015 or np.max(np.std(bias, axis=0)) > 0.3:
+        raise ValueError("Stationary calibration sensor noise exceeds reviewed range")
+    result = dict(imu_config)
+    result["gyro_bias_imu"] = np.mean(gyro, axis=0).tolist()
+    result["accel_bias_imu"] = np.mean(bias, axis=0).tolist()
+    if (
+        np.linalg.norm(result["accel_bias_imu"]) > 1
+        or np.linalg.norm(result["gyro_bias_imu"]) > 0.1
+    ):
+        raise ValueError("Stationary bias correction is implausibly large")
+    return result
+
+
 class Session:
-    def __init__(self, policy, trajectory, model):
+    def __init__(self, policy, trajectory, model, observer_options=None):
+        self.observer_options = dict(observer_options or {})
         self.policy, self.trajectory, self.model = policy, trajectory, model
         ids = [model.joint(name).id for name in JOINTS]
         self.path = TargetPath(trajectory, model.jnt_range[ids])
@@ -299,8 +462,13 @@ class Session:
 
     def activate(self, epoch, initial_height, *, calibrated=False):
         self.cancel()
-        self.estimator = SensorEstimator(
-            self.model, initial_height, epoch, calibrated=calibrated
+        options = self.observer_options.copy()
+        kind = options.pop("kind", "inertial")
+        if kind not in ("inertial", "contact"):
+            raise ValueError("Unknown observer kind")
+        estimator = ContactEstimator if kind == "contact" else SensorEstimator
+        self.estimator = estimator(
+            self.model, initial_height, epoch, calibrated=calibrated, **options
         )
         self.path.reset()
         self.telemetry = None
@@ -311,7 +479,7 @@ class Session:
         self.active = False
         self.pending = None
 
-    def ingest(self, timestamp, force, quaternion, gyro, q, dq):
+    def ingest(self, timestamp, force, quaternion, gyro, q, dq, loads=None):
         if not self.active:
             raise RuntimeError("Explicit activation required")
         try:
@@ -324,6 +492,10 @@ class Session:
             finite(gyro, (3,))
             finite(q, (12,))
             finite(dq, (12,))
+            if isinstance(self.estimator, ContactEstimator):
+                if loads is None:
+                    raise ValueError("Contact observer requires measured foot loads")
+                self.estimator.correct_contacts(quaternion, gyro, q, dq, loads)
             self.telemetry = (
                 np.array(quaternion),
                 np.array(gyro),
@@ -409,11 +581,13 @@ class CustomDeployConfig:
 def get_custom_buffers_dict():
     return {
         "handstand_rx_lock": threading.Lock(),
+        "handstand_stationary_rx": deque(maxlen=256),
         "handstand_rx": deque(maxlen=256),
         "handstand_rx_fault": None,
         "handstand_rx_seen": False,
         "handstand_last_mode": None,
         "handstand_tick": None,
+        "handstand_gap_intervals": 0,
         "handstand_sensor_time": None,
         "handstand_last_receive": None,
         "handstand_last_sent": None,
@@ -494,6 +668,9 @@ def read_lowstate(msg):
         finite(imu.accelerometer, (3,)).copy(),
         finite([m.q for m in msg.motor_state[:12]], (12,))[PERMUTATION],
         finite([m.dq for m in msg.motor_state[:12]], (12,))[PERMUTATION],
+        finite(msg.foot_force, (4,))[[1, 0, 3, 2]]
+        if hasattr(msg, "foot_force")
+        else None,
     )
 
 
@@ -523,15 +700,33 @@ def prepare_runtime(cfg):
         np.asarray(cfg.default_dof_pos), trajectory["nominal"], atol=1e-7, rtol=0
     ):
         raise ValueError("Bundle nominal posture mismatch")
-    path = os.environ.get("GO2_HANDSTAND_CALIBRATION")
-    if not path:
-        raise ValueError("Set GO2_HANDSTAND_CALIBRATION to a measured calibration JSON")
+    path = os.environ.get(
+        "GO2_HANDSTAND_CALIBRATION", str(folder / "calibration.model.json")
+    )
+    if not Path(path).exists():
+        raise ValueError(
+            "Set GO2_HANDSTAND_CALIBRATION or export a new model calibration"
+        )
     calibration = json.loads(Path(path).read_text())
-    if calibration.get("calibrated") is not True:
-        raise ValueError("IMU/frame/height calibration is required")
+    if (
+        calibration.get("calibrated") is not True
+        and calibration.get("source") != "model_and_ta_estimates"
+    ):
+        raise ValueError(
+            "IMU/frame/height calibration or explicit model preflight is required"
+        )
     for key in ["initial_height", "tick_period_s"]:
         if not np.isfinite(calibration[key]) or calibration[key] <= 0:
             raise ValueError("Invalid height or tick period")
+    age = calibration.get("max_lowstate_age_s", 0.006)
+    if not np.isfinite(age) or not 0 < age <= 0.015:
+        raise ValueError("LowState age must remain bounded at 15 ms or less")
+    command_age = calibration.get("max_command_state_age_s", age)
+    if not np.isfinite(command_age) or not 0 < command_age <= 0.020:
+        raise ValueError("Command snapshot age must remain bounded at 20 ms")
+    count = calibration.get("stationary_samples", 0)
+    if count != 0 and (not isinstance(count, int) or not 100 <= count <= 256):
+        raise ValueError("Stationary calibration requires 100 to 256 samples")
     IMUCalibration(**calibration["imu"])
     model_path = checked(folder / "go2_fk.mjb", cfg.bundle_meta["handstand_fk_sha256"])
     model = mujoco.MjModel.from_binary_path(str(model_path))
@@ -546,7 +741,9 @@ def initialize_controller(c):
     if resources is None:
         raise ValueError("Load the handstand bundle before initializing the runner")
     policy, trajectory, model, calibration = resources
-    c.handstand_session = Session(policy, trajectory, model)
+    c.handstand_session = Session(
+        policy, trajectory, model, calibration.get("observer")
+    )
     c.handstand_calibration = calibration
     c.handstand_snapshot = np.zeros(47, np.float32)
 
@@ -559,6 +756,15 @@ def on_lowstate_msg(c, msg, received):
             c.handstand_rx.clear()
             c.handstand_rx_fault = None
             c.handstand_last_mode = getattr(c._state, "name", "")
+            if c.handstand_last_mode == "INTERMEDIATE":
+                try:
+                    c.handstand_stationary_rx.append(
+                        (float(received), read_lowstate(msg))
+                    )
+                except (ValueError, TypeError, AttributeError):
+                    c.handstand_stationary_rx.clear()
+            else:
+                c.handstand_stationary_rx.clear()
             return
         try:
             packet = read_lowstate(msg)
@@ -600,14 +806,27 @@ def update_custom_buffers(c, t):
                 packets = list(c.handstand_rx)
                 c.handstand_rx.clear()
                 fault = c.handstand_rx_fault
+        # A DDS callback may arrive after the cycle-entry timestamp t.
+        # Check receipt age using the runner clock AFTER copying its snapshot.
+        receipt_now = getattr(c, "lowstate_clock", lambda: t)()
         if fault:
             raise ValueError(fault)
         if not c.handstand_rx_seen:
             raise ValueError("Runner callback bridge is missing")
-        if not np.isfinite(t) or not 0 <= t - received <= 0.006:
+        if (
+            not np.isfinite([t, receipt_now]).all()
+            or not -1e-9
+            <= receipt_now - received
+            <= c.handstand_calibration.get("max_lowstate_age_s", 0.006) + 1e-9
+        ):
             raise ValueError("Stale or future LowState")
         starting = c.handstand_last_mode != "CUSTOM_CTRL"
         if starting:
+            if c.handstand_calibration.get("calibrated") is not True:
+                raise ValueError(
+                    "Model preflight only: staff calibration confirmation "
+                    "required before activation"
+                )
             if c.handstand_last_sent is None:
                 raise ValueError(
                     "Enter INTERMEDIATE before CUSTOM_CTRL "
@@ -620,10 +839,27 @@ def update_custom_buffers(c, t):
                     raise ValueError("No activation IMU stream")
                 c.handstand_snapshot = None
                 return False
-            c.handstand_imu_calibration = IMUCalibration(
-                **c.handstand_calibration["imu"]
-            )
+            imu_config = c.handstand_calibration["imu"]
+            if c.handstand_calibration.get("stationary_samples", 0):
+                with c.handstand_rx_lock:
+                    readings = list(c.handstand_stationary_rx)
+                    c.handstand_stationary_rx.clear()
+                if not readings or not -1e-9 <= receipt_now - readings[-1][0] <= 0.04:
+                    raise ValueError(
+                        "Need a fresh stationary calibration before activation"
+                    )
+                imu_config = calibrate_stationary(
+                    imu_config,
+                    readings,
+                    samples=c.handstand_calibration["stationary_samples"],
+                    contact_threshold=c.handstand_calibration["observer"][
+                        "contact_threshold"
+                    ],
+                )
+            c.handstand_effective_imu = imu_config
+            c.handstand_imu_calibration = IMUCalibration(**imu_config)
             c.handstand_tick = None
+            c.handstand_gap_intervals = 0
             c.handstand_sensor_time = 0.0
             c.handstand_last_raw = None
             c.handstand_activation_wait = None
@@ -636,7 +872,7 @@ def update_custom_buffers(c, t):
             raise ValueError("Runner cadence differs from 50 Hz")
         session = c.handstand_session
         for arrival, packet in packets:
-            tick, quaternion, gyro, force, q, dq = packet
+            tick, quaternion, gyro, force, q, dq, loads = packet
             if c.handstand_tick is not None:
                 delta = (tick - c.handstand_tick) % (2**32)
                 if delta == 0:
@@ -647,8 +883,13 @@ def update_custom_buffers(c, t):
                         raise ValueError("Conflicting duplicate IMU timestamp")
                     continue  # Duplicate never advances integration/freshness.
                 dt = delta * c.handstand_calibration["tick_period_s"]
-                if not 0 < dt <= 0.003:
+                if (
+                    not 0
+                    < dt
+                    <= session.observer_options.get("max_interval", 0.003) + 1e-9
+                ):
                     raise ValueError("Missing or out-of-order IMU frame")
+                c.handstand_gap_intervals += int(dt > 0.003 + 1e-9)
                 c.handstand_sensor_time += dt
             else:
                 session.activate(
@@ -664,13 +905,17 @@ def update_custom_buffers(c, t):
             quaternion, gyro, force = c.handstand_imu_calibration.correct(
                 c.handstand_sensor_time, quaternion, gyro, force
             )
-            session.ingest(c.handstand_sensor_time, force, quaternion, gyro, q, dq)
+            session.ingest(
+                c.handstand_sensor_time, force, quaternion, gyro, q, dq, loads
+            )
             c.handstand_last_raw = packet
             c.handstand_tick = tick
             c.handstand_last_receive = arrival
         if (
             c.handstand_last_receive is None
-            or not 0 <= t - c.handstand_last_receive <= 0.006
+            or not -1e-9
+            <= receipt_now - c.handstand_last_receive
+            <= c.handstand_calibration.get("max_lowstate_age_s", 0.006) + 1e-9
         ):
             raise ValueError("No fresh distinct IMU sample")
         if c.handstand_tick != current[0]:
@@ -704,6 +949,13 @@ def bound_command(c, offset, kp_mult=1.0, kd_mult=1.0):
     session = c.handstand_session
     if not session.active or c.handstand_snapshot is None:
         raise ValueError("Handstand is inactive or faulted")
+    if hasattr(c, "lowstate_clock"):
+        # Bound age of the snapshot actually used by the actor, not a newer
+        # callback which arrived while this batch was being processed.
+        age = c.lowstate_clock() - c.handstand_last_receive
+        limit = c.handstand_calibration.get("max_command_state_age_s", 0.006)
+        if not np.isfinite(age) or not -1e-9 <= age <= limit + 1e-9:
+            _runner_fault(c, "Command sensor snapshot exceeded age budget")
     if c.kp_mult != 1 or c.kd_mult != 1 or kp_mult != 1 or kd_mult != 1:
         raise ValueError("Handstand gains must stay 60/3")
     if session.pending is not None:
@@ -871,6 +1123,56 @@ def dry_run(checkpoint, reference, recording):
     return result
 
 
+def model_calibration(trajectory):
+    """URDF mounting and saved initial base height, NOT hardware measurements."""
+    import xml.etree.ElementTree as ET
+
+    path = Path(__file__).resolve().parents[2] / "resources/robots/go2/urdf/go2.urdf"
+    origin = ET.parse(path).getroot().find("joint[@name='imu_joint']/origin")
+    if origin is None or origin.attrib.get("rpy") != "0 0 0":
+        raise ValueError("Review changed model IMU mounting")
+    model = build_fk_model()
+    data = mujoco.MjData(model)
+    mujoco.mj_setState(
+        model, data, trajectory["initial_state"], mujoco.mjtState.mjSTATE_INTEGRATION
+    )
+    return {
+        "source": "model_and_ta_estimates",
+        "calibrated": False,
+        "initial_height": float(data.qpos[2]),
+        "tick_period_s": 0.001,
+        "max_lowstate_age_s": 0.015,
+        "max_command_state_age_s": 0.020,
+        "stationary_samples": 100,
+        "observer": {
+            "kind": "contact",
+            "max_interval": 0.012,
+            "max_age": 0.015,
+            "contact_threshold": 10.0,
+        },
+        "imu": {
+            "body_from_imu": np.eye(3).tolist(),
+            "world_alignment": np.eye(3).tolist(),
+            "lever_arm_body": [float(x) for x in origin.attrib["xyz"].split()],
+            "accel_bias_imu": [0.0, 0.0, 0.0],
+            "gyro_bias_imu": [0.0, -0.009, 0.0],
+            "accel_scale": 9.81 / 9.55,
+            "max_interval": 0.012,
+            "alpha_tau": 0.02,
+            "stationary_gyro_limit": 0.04,
+        },
+        "requires_staff_confirmation": [
+            "Confirm model vs physical mounting and world alignment/yaw",
+            "Initial height is the model base origin, not COM or body surface",
+            "Confirm provisional 0.001 s tick units; receipt rate is insufficient",
+            "Confirm foot-force validity, units, 10 raw-unit threshold, "
+            "FR/FL/RR/RL order and non-slip level ground",
+            "Rest norm 9.55 is a scale hypothesis; biases need stationary samples",
+            "Verify timing tails, motor limits and recovery",
+        ],
+    }
+
+
 def export_runtime_bundle(checkpoint, reference, destination):
     destination = Path(destination)
     if destination.exists():
@@ -908,21 +1210,10 @@ def export_runtime_bundle(checkpoint, reference, destination):
         "physical_readiness": "UNVALIDATED",
     }
     (destination / "deploy_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-    example = {
-        "calibrated": False,
-        "initial_height": None,
-        "tick_period_s": None,
-        "imu": {
-            "body_from_imu": np.eye(3).tolist(),
-            "world_alignment": np.eye(3).tolist(),
-            "lever_arm_body": [0.0, 0.0, 0.0],
-            "accel_bias_imu": [0.0, 0.0, 0.0],
-            "gyro_bias_imu": [0.0, 0.0, 0.0],
-        },
-    }
-    (destination / "calibration.example.json").write_text(
-        json.dumps(example, indent=2) + "\n"
-    )
+    # Keep the old example name as an alias, now with complete model values.
+    example = json.dumps(model_calibration(trajectory), indent=2) + "\n"
+    for name in ("calibration.model.json", "calibration.example.json"):
+        (destination / name).write_text(example)
     return meta
 
 
