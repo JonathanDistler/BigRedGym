@@ -820,3 +820,62 @@ def test_command_age_budget_covers_processing_but_is_not_unbounded(
             publish(c)
         assert c.handstand_session.path.step == 0
         assert not c.handstand_session.active
+
+
+def test_packet_loss_preserves_underlying_timestamp_indexed_sensor_noise(
+    assets, monkeypatch
+):
+    from scripts.handstand_capture import trial
+
+    original_rng = np.random.default_rng
+    streams = []
+
+    class Logged:
+        def __init__(self, rng):
+            self.rng = rng
+            self.values = []
+            streams.append(self.values)
+
+        def normal(self, *args, **kwargs):
+            value = self.rng.normal(*args, **kwargs)
+            self.values.append(value.copy())
+            return value
+
+        def __getattr__(self, name):
+            return getattr(self.rng, name)
+
+    def rng(seed):
+        result = original_rng(seed)
+        return Logged(result) if seed == 8301000 else result
+
+    class TwoSteps:
+        viewer = None
+        frames = 0
+
+        def __init__(self, _):
+            self.calls = 0
+
+        def sync(self):
+            self.calls += 1
+            return self.calls <= 2
+
+        def capture(self, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(np.random, "default_rng", rng)
+    for drops in (0, 5):
+        result = trial(
+            assets[1],
+            assets[2],
+            301000,
+            False,
+            TwoSteps,
+            {"ta": True, "drop_count": drops},
+        )
+        assert result["cancelled"] and result["steps"] == 2
+    assert len(streams) == 2
+    assert len(streams[0]) == len(streams[1]) == 42
+    np.testing.assert_array_equal(streams[0], streams[1])
