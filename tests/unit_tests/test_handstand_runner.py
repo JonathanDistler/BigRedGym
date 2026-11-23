@@ -233,7 +233,7 @@ def test_exit_and_reentry_reset_phase_and_cancel_pending(controller):
 
 
 def test_bundle_loads_through_cornell_loader_and_checks_calibration(
-    assets, monkeypatch
+    assets, monkeypatch, tmp_path
 ):
     from go2_deploy.policy_bundle import load_bundle
 
@@ -249,6 +249,12 @@ def test_bundle_loads_through_cornell_loader_and_checks_calibration(
     _, model_cfg = load_bundle(folder)
     assert model_cfg.custom_runtime[3]["calibrated"] is False
     assert model_cfg.custom_runtime[3]["source"] == "model_and_ta_estimates"
+    candidate = dict(model_cfg.custom_runtime[3], source="staff_log_candidate")
+    candidate_file = tmp_path / "calibration.candidate.json"
+    candidate_file.write_text(json.dumps(candidate))
+    monkeypatch.setenv("GO2_HANDSTAND_CALIBRATION", str(candidate_file))
+    _, candidate_cfg = load_bundle(folder)
+    assert candidate_cfg.custom_runtime[3]["calibrated"] is False
 
 
 def test_template_loader_rejects_unknown_task():
@@ -291,6 +297,53 @@ def test_canvas_bundle_rejects_a_different_task_config(assets):
 
     with pytest.raises(ValueError, match="bundle is for task"):
         load_bundle(assets[0], import_custom_impl.load_custom_impl("go2trot"))
+
+
+def test_retrained_candidate_is_separate_and_release_hash_remains_enforced(
+    assets, tmp_path
+):
+    from go2_deploy.policy_bundle import load_bundle
+
+    original = assets[0] / "capture_checkpoint.pt"
+    saved = torch.load(original, map_location="cpu", weights_only=False)
+    saved["test_candidate_provenance"] = "synthetic metadata change; no training"
+    checkpoint = tmp_path / "candidate.pt"
+    torch.save(saved, checkpoint)
+    with pytest.raises(ValueError, match="SHA256"):
+        team.export_runtime_bundle(
+            checkpoint, assets[0] / "trajectory.npz", tmp_path / "release"
+        )
+    folder = tmp_path / "candidate"
+    team.export_runtime_bundle(
+        checkpoint, assets[0] / "trajectory.npz", folder, candidate=True
+    )
+    policy, cfg = load_bundle(folder)
+    assert cfg.task_name == "go2handstand_candidate"
+    torch.testing.assert_close(policy(torch.zeros(47)), assets[1](torch.zeros(47)))
+    meta = json.loads((folder / "deploy_meta.json").read_text())
+    meta["task_name"] = "go2handstand"
+    (folder / "deploy_meta.json").write_text(json.dumps(meta))
+    with pytest.raises(ValueError, match="SHA256"):
+        load_bundle(folder)
+
+
+@pytest.mark.parametrize("change", ["order", "observation_scale", "action_scale"])
+def test_bundle_rejects_training_schema_drift(assets, tmp_path, change):
+    import shutil
+    from go2_deploy.policy_bundle import load_bundle
+
+    folder = tmp_path / "bad_schema"
+    shutil.copytree(assets[0], folder)
+    meta = json.loads((folder / "deploy_meta.json").read_text())
+    if change == "order":
+        meta["obs_vector"][:2] = reversed(meta["obs_vector"][:2])
+    elif change == "observation_scale":
+        meta["scaling"]["base_ang_vel"] = 2.0
+    else:
+        meta["scaling"]["dof_pos_target"] = 1.0
+    (folder / "deploy_meta.json").write_text(json.dumps(meta))
+    with pytest.raises(ValueError, match="training"):
+        load_bundle(folder)
 
 
 def test_submission_rejects_modified_archive_before_creating_log(tmp_path):
@@ -375,6 +428,15 @@ def test_instance_hook_can_defer_cycle_until_first_distinct_packet(controller):
     c = controller
     c.cfg.custom_impl = NS(update_custom_buffers=lambda main_controller, t: False)
     assert cls._process_custom_buffers(c, 10.0) is False
+
+
+def test_runtime_configuration_is_recorded_even_before_activation(controller):
+    events = []
+    controller.csv_logger = NS(log_event=lambda name, data: events.append((name, data)))
+    team.initialize_controller(controller)
+    assert events[0][0] == "handstand_runtime_config"
+    assert events[0][1]["calibration"] == controller.handstand_calibration
+    assert not controller.handstand_session.active
 
 
 @pytest.mark.parametrize("accepted", [True, False])

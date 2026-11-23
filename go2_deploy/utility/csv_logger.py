@@ -78,6 +78,10 @@ class CSVLogger:
             self.obs_columns += _numbered("obs_" + obs, cfg.obs_sizes[obs])
 
         self.streams = {
+            "events": _Stream(
+                os.path.join(self.run_dir, "events.csv"),
+                ["t", "state", "event", "data_json"],
+            ),
             "lowstate": _Stream(
                 os.path.join(self.run_dir, "lowstate.csv"), self._lowstate_header()
             ),
@@ -284,6 +288,18 @@ class CSVLogger:
             self.queue.put_nowait((stream_name, row))
         except queue.Full:
             self.dropped_rows += 1
+
+    def log_event(self, event, data):
+        """Queue calibration/status evidence; no disk I/O on the control thread."""
+        self._enqueue(
+            "events",
+            [
+                time.monotonic(),
+                self.main_controller._state.name,
+                event,
+                json.dumps(data, allow_nan=False),
+            ],
+        )
 
     # Consumer
 

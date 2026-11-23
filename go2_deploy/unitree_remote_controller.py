@@ -147,12 +147,26 @@ class RCHandler:
             if self.rc.X == [1, 0]:
                 self.controller.request_emergency_stop()
                 return
-            # if self.rc.Y == [1, 0]:
-            #     self.controller.request_recovery()
-            #elif self.rc.B == [1, 0]:
-            #    self.controller.request_intermediate()
+            elif self.rc.Y == [1, 0]:
+                self.controller.request_shutdown()
+                return
+            elif self.rc.B == [1, 0]:
+                self.controller.request_intermediate()
+                return
             elif self.rc.A == [1, 0]:
+                if (
+                    getattr(
+                        self.controller.cfg.custom_impl, "require_intermediate", False
+                    )
+                    and self.controller._state.name != "INTERMEDIATE"
+                ):
+                    print("Press remote B and establish stationary hold before A")
+                    return
                 self.controller.request_custom_ctrl()
+                return
+
+        if getattr(self.controller.cfg.custom_impl, "fixed_gains", False):
+            return
 
         if self.rc.Up == [1, 0]:
             self.controller.kp_mult += 0.1

@@ -1,5 +1,6 @@
 import time
 import threading
+import json
 
 from go2_deploy.state import State
 from go2_deploy.unitree_remote_controller import UnitreeRemoteController, RCHandler
@@ -433,14 +434,16 @@ class MainController:
             + f"{self.action_count / (current_time - self.last_terminal_output_time):.5} Hz"  # noqa: E501
         )
         print("Current mode: " + self._state.name)
-        print("Keyboard command [RC command]: meaning")
-        print("q: intermediate pose hold (before custom control)")
-        print(
-            "<enter> [X]: emergency stop | c [A]: custom controller"  # noqa: E501
-        )
-        print(
-            "i [Up]: increase kp (by 10%) | k [Down]: decrease kp | l [Right]: increase kd | j [Left]: decrease kd\n"  # noqa: E501
-        )
+        status = getattr(self.cfg.custom_impl, "runtime_status", None)
+        if status is not None:
+            try:
+                print("Policy status: " + json.dumps(status(self)))
+            except (ValueError, AttributeError) as exc:
+                print(f"Policy status unavailable: {exc}")
+        print("Remote B: intermediate hold | A: activate | X: cancel/recover")
+        print("Remote Y: shutdown using the runner recovery path")
+        if not getattr(self.cfg.custom_impl, "fixed_gains", False):
+            print("Remote Up/Down: kp | Right/Left: kd")
 
         self.action_count = 0
         self.lowstate_obs_count = 0

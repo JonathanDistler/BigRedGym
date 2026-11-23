@@ -3,6 +3,7 @@ import signal
 import sys
 import time
 
+
 def main():
     parser = argparse.ArgumentParser(description="Deploy a policy to a Unitree Go2.")
     parser.add_argument("interface", help="Robot network interface, e.g. eth0")
@@ -17,8 +18,29 @@ def main():
         "go2_deploy/custom_implementation/. Required without --bundle; with "
         "--bundle it defaults to the bundle's task.",
     )
+    parser.add_argument(
+        "--command-check",
+        action="store_true",
+        help="Remote-activated encoder/command diagnostic; no handstand calibration",
+    )
+    parser.add_argument(
+        "--check-joint",
+        type=int,
+        default=0,
+        help="Canonical FL/FR/RL/RR joint index 0..11",
+    )
+    parser.add_argument(
+        "--check-offset",
+        type=float,
+        default=0.0,
+        help="Diagnostic excursion in radians (default hold only; max abs 0.02)",
+    )
     args = parser.parse_args()
-    if not args.bundle and not args.task:
+    if args.command_check and (args.bundle or args.task):
+        parser.error("--command-check is separate from --bundle/--task")
+    if not args.command_check and (args.check_joint != 0 or args.check_offset != 0):
+        parser.error("--check-joint/--check-offset require --command-check")
+    if not args.bundle and not args.task and not args.command_check:
         parser.error("--task is required when not deploying from --bundle")
     if sys.platform != "linux":
         parser.error("Go2 deployment requires Linux (timerfd).")
@@ -44,14 +66,17 @@ def main():
     print(f"go2_deploy {' '.join(sys.argv[1:])}")
 
     from go2_deploy.main_controller import MainController
-    from go2_deploy.keyboard_handler import KeyboardHandler
     from go2_deploy.rl_controller import RLController
 
     # Load the policy before touching the robot, so a bad bundle fails here.
     from go2_deploy.utility.import_custom_impl import load_custom_impl
 
     custom_impl = load_custom_impl(args.task) if args.task else None
-    if args.bundle:
+    if args.command_check:
+        from go2_deploy.custom_implementation.go2commandcheck import make_runtime
+
+        policy, cfg = make_runtime(args.check_joint, args.check_offset)
+    elif args.bundle:
         from go2_deploy.policy_bundle import load_bundle
 
         # Without --task, load_bundle picks the impl for the bundle's task_name
@@ -86,7 +111,6 @@ def main():
 
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGHUP, request_shutdown)
-    keyboard_handler = KeyboardHandler(controller)  # noqa: F841
 
     print(
         "\nConnection successful! Keep the robot away from obstacles and "
@@ -95,7 +119,7 @@ def main():
 
     while not controller.shut_down:
         time.sleep(0.2)
-    terminal_log.record_exit(f"stopped ({stop_signal[0]})")
+    terminal_log.record_exit(f"stopped ({stop_signal[0] if stop_signal else 'remote'})")
 
 
 if __name__ == "__main__":

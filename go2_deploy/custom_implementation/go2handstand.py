@@ -94,12 +94,12 @@ class InferencePolicy(nn.Module):
         return self.components(obs)[0]
 
 
-def load_assets(checkpoint, reference):
+def load_assets(checkpoint, reference, checkpoint_sha=CHECKPOINT_SHA):
     if sys.version_info[:2] != (3, 11) or mujoco.__version__ != "3.11.0":
         raise ValueError(
             "Saved handstand reference requires Python 3.11 and MuJoCo 3.11.0"
         )
-    checked(checkpoint, CHECKPOINT_SHA)
+    checked(checkpoint, checkpoint_sha)
     checked(reference, REFERENCE_SHA)
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
     if (
@@ -419,6 +419,15 @@ def calibrate_stationary(imu_config, readings, *, samples=100, contact_threshold
     ):
         raise ValueError("Stationary calibration stream is incomplete")
     calibration = IMUCalibration(**imu_config)
+    velocities = np.array([finite(packet[5], (12,)) for _, packet in readings])
+    # Real resting logs have isolated encoder-velocity spikes above 0.1 rad/s,
+    # while positions stay within 0.0003 rad. Require low window RMS as well as
+    # the existing activation peak bound; position/gyro checks still apply.
+    if (
+        np.max(abs(velocities)) > 0.2
+        or np.max(np.sqrt(np.mean(velocities**2, axis=0))) > 0.05
+    ):
+        raise ValueError("Robot must be stationary for calibration")
     gyro, bias, positions, rotations = [], [], [], []
     for _, packet in readings:
         _, quat, omega, force, q, dq, loads = packet
@@ -426,10 +435,7 @@ def calibrate_stationary(imu_config, readings, *, samples=100, contact_threshold
             raise ValueError(
                 "Stationary calibration requires all four measured foot loads"
             )
-        if (
-            np.max(abs(finite(dq, (12,)))) > 0.1
-            or np.linalg.norm(omega - calibration.gyro_bias) > 0.05
-        ):
+        if np.linalg.norm(omega - calibration.gyro_bias) > 0.05:
             raise ValueError("Robot must be stationary for calibration")
         r = calibration.world @ rotation(quat) @ calibration.mount.T
         expected = calibration.mount.T @ (r.T @ [0, 0, 9.81]) / calibration.accel_scale
@@ -571,6 +577,7 @@ SLICES = {
 
 
 class CustomDeployConfig(CustomConfig):
+    fixed_gains = require_intermediate = True
     task_name = "go2handstand"
     default_dof_pos = [
         -2.2248883690812155e-09,
@@ -612,6 +619,25 @@ class CustomDeployConfig(CustomConfig):
     def on_command_sent(self, main_controller, lowcmd, accepted, t):
         return on_command_sent(main_controller, lowcmd, accepted, t)
 
+    def runtime_status(self, c):
+        with c.handstand_rx_lock:
+            samples = len(c.handstand_stationary_rx)
+        result = {
+            "task": self.task_name,
+            "calibration_confirmed": c.handstand_calibration.get("calibrated") is True,
+            "stationary_samples": samples,
+            "required_samples": c.handstand_calibration.get("stationary_samples", 0),
+            "step": c.handstand_session.path.step,
+        }
+        with c.last_lowstate_msg_lock:
+            msg = c.last_lowstate_msg
+            if msg is not None:
+                q = read_lowstate(msg)[4]
+                error = abs(q - c.handstand_session.path.initial)
+                result["largest_initial_joint_error_rad"] = float(error.max())
+                result["limiting_joint"] = JOINTS[int(error.argmax())]
+        return result
+
     obs_vector = list(SLICES)
     custom_obs_sizes = {name: end - start for name, (start, end) in SLICES.items()}
     # Review requirements only: Cornell DeployConfig does not inherit these!
@@ -621,6 +647,18 @@ class CustomDeployConfig(CustomConfig):
         projected_gravity = base_ang_vel = dof_pos_obs = dof_vel = 1.0
         handstand_previous_target = handstand_elapsed = handstand_com = 1.0
         dof_pos_target = 2.0  # RLController action multiplier; NOT an obs divisor.
+
+
+class CandidateDeployConfig(CustomDeployConfig):
+    """Explicitly exported staff retrain; never changes the pinned release task."""
+
+    task_name = "go2handstand_candidate"
+
+    def prepare_runtime(self, cfg):
+        digest = cfg.bundle_meta.get("candidate_checkpoint_sha256", "")
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise ValueError("Candidate requires an explicit checkpoint SHA256")
+        return prepare_runtime(cfg, checkpoint_sha=digest)
 
 
 def get_custom_buffers_dict():
@@ -719,13 +757,22 @@ def read_lowstate(msg):
     )
 
 
-def prepare_runtime(cfg):
+def prepare_runtime(cfg, checkpoint_sha=CHECKPOINT_SHA):
     """Load and warm before DDS initialization; calibration is never invented."""
     if cfg.ctrl_freq != 50 or cfg.exp_moving_avg or cfg.kp != 60 or cfg.kd != 3:
         raise ValueError("Handstand requires 50 Hz, EMA off, Kp=60, Kd=3")
+    if cfg.obs_vector != list(SLICES) or any(
+        cfg.obs_sizes.get(k) != end - start for k, (start, end) in SLICES.items()
+    ):
+        raise ValueError("Handstand observation order/sizes differ from training")
+    if any(
+        not np.array_equal(np.asarray(getattr(cfg.DeployScaling, k)), 1.0)
+        for k in SLICES
+    ) or not np.array_equal(np.asarray(cfg.DeployScaling.dof_pos_target), 2.0):
+        raise ValueError("Handstand observation/action scaling differs from training")
     folder = Path(cfg.bundle_dir)
     policy, trajectory = load_assets(
-        folder / "capture_checkpoint.pt", folder / "trajectory.npz"
+        folder / "capture_checkpoint.pt", folder / "trajectory.npz", checkpoint_sha
     )
     candidate = cfg.loaded_policy
     expected = policy.state_dict()
@@ -753,10 +800,10 @@ def prepare_runtime(cfg):
             "Set GO2_HANDSTAND_CALIBRATION or export a new model calibration"
         )
     calibration = json.loads(Path(path).read_text())
-    if (
-        calibration.get("calibrated") is not True
-        and calibration.get("source") != "model_and_ta_estimates"
-    ):
+    if calibration.get("calibrated") is not True and calibration.get("source") not in {
+        "model_and_ta_estimates",
+        "staff_log_candidate",
+    }:
         raise ValueError(
             "IMU/frame/height calibration or explicit model preflight is required"
         )
@@ -791,6 +838,9 @@ def initialize_controller(c):
     )
     c.handstand_calibration = calibration
     c.handstand_snapshot = np.zeros(47, np.float32)
+    log_event = getattr(getattr(c, "csv_logger", None), "log_event", None)
+    if log_event is not None:
+        log_event("handstand_runtime_config", {"calibration": calibration})
 
 
 def on_lowstate_msg(c, msg, received):
@@ -902,6 +952,15 @@ def update_custom_buffers(c, t):
                     ],
                 )
             c.handstand_effective_imu = imu_config
+            log_event = getattr(getattr(c, "csv_logger", None), "log_event", None)
+            if log_event is not None:
+                log_event(
+                    "handstand_calibration",
+                    {
+                        "configured": c.handstand_calibration,
+                        "effective_imu": imu_config,
+                    },
+                )
             c.handstand_imu_calibration = IMUCalibration(**imu_config)
             c.handstand_tick = None
             c.handstand_gap_intervals = 0
@@ -1218,11 +1277,16 @@ def model_calibration(trajectory):
     }
 
 
-def export_runtime_bundle(checkpoint, reference, destination):
+def export_runtime_bundle(checkpoint, reference, destination, *, candidate=False):
     destination = Path(destination)
     if destination.exists():
         raise FileExistsError("Choose a fresh bundle directory")
-    policy, trajectory = load_assets(checkpoint, reference)
+    checkpoint_sha = (
+        hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
+        if candidate
+        else CHECKPOINT_SHA
+    )
+    policy, trajectory = load_assets(checkpoint, reference, checkpoint_sha)
     model = build_fk_model()
     destination.mkdir(parents=True)
     shutil.copy2(checkpoint, destination / "capture_checkpoint.pt")
@@ -1234,7 +1298,7 @@ def export_runtime_bundle(checkpoint, reference, destination):
         return hashlib.sha256((destination / name).read_bytes()).hexdigest()
 
     meta = {
-        "task_name": "go2handstand",
+        "task_name": "go2handstand_candidate" if candidate else "go2handstand",
         "custom_implementation": "go2handstand.py",
         "obs_vector": list(SLICES),
         "obs_sizes": CustomDeployConfig.custom_obs_sizes,
@@ -1250,10 +1314,15 @@ def export_runtime_bundle(checkpoint, reference, destination):
         "num_actions": 12,
         "policy_sha256": digest("policy.pt"),
         "handstand_fk_sha256": digest("go2_fk.mjb"),
-        "checkpoint_sha256": CHECKPOINT_SHA,
+        "checkpoint_sha256": checkpoint_sha,
         "reference_sha256": REFERENCE_SHA,
         "physical_readiness": "UNVALIDATED",
     }
+    if candidate:
+        meta["candidate_checkpoint_sha256"] = checkpoint_sha
+        meta["candidate_status"] = (
+            "staff retrain; performance must be evaluated separately"
+        )
     (destination / "deploy_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
     # Keep the old example name as an alias, now with complete model values.
     example = json.dumps(model_calibration(trajectory), indent=2) + "\n"
@@ -1270,10 +1339,18 @@ if __name__ == "__main__":
     parser.add_argument("--reference", type=Path, required=True)
     parser.add_argument("--recording", type=Path)
     parser.add_argument("--export-bundle", type=Path)
+    parser.add_argument(
+        "--candidate",
+        action="store_true",
+        help="Explicit separate candidate task for a retrained checkpoint",
+    )
     arguments = parser.parse_args()
     if arguments.export_bundle:
         export_runtime_bundle(
-            arguments.checkpoint, arguments.reference, arguments.export_bundle
+            arguments.checkpoint,
+            arguments.reference,
+            arguments.export_bundle,
+            candidate=arguments.candidate,
         )
     elif arguments.recording:
         dry_run(arguments.checkpoint, arguments.reference, arguments.recording)

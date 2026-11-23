@@ -5,6 +5,7 @@ retrain or replace the policy. This module never imports the Unitree SDK.
 """
 
 import argparse
+import hashlib
 from contextlib import ExitStack
 import json
 from pathlib import Path
@@ -398,6 +399,11 @@ def main():
     p.add_argument("mode", choices=["full"])
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument(
+        "--candidate",
+        action="store_true",
+        help="Evaluate a retrained candidate; release pinning remains the default",
+    )
+    p.add_argument(
         "--trajectory", "--reference", dest="trajectory", type=Path, required=True
     )
     p.add_argument("--output", type=Path, required=True)
@@ -456,7 +462,12 @@ def main():
         p.error("Invalid trial count or rendering settings")
     if a.output.exists():
         raise FileExistsError("Choose a fresh output directory")
-    policy, trajectory = load_assets(a.checkpoint, a.trajectory)
+    kwargs = (
+        {"checkpoint_sha": hashlib.sha256(a.checkpoint.read_bytes()).hexdigest()}
+        if a.candidate
+        else {}
+    )
+    policy, trajectory = load_assets(a.checkpoint, a.trajectory, **kwargs)
     a.output.mkdir(parents=True)
     rows = []
     seeds = [a.evaluation_seed] + (
