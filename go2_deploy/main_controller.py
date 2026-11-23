@@ -6,7 +6,6 @@ from go2_deploy.unitree_remote_controller import UnitreeRemoteController, RCHand
 from go2_deploy.utility import deploy_utility
 from go2_deploy.utility.csv_logger import CSVLogger
 from go2_deploy.utility.thread import RecurrentThread
-from go2_deploy.utility.import_custom_impl import custom_impl
 
 import torch
 from unitree_sdk2py.core.channel import (
@@ -103,10 +102,10 @@ class MainController:
 
     # initialize student-provided custom buffers
     def _init_custom_buffers(self):
-        custom_buffers_dict = custom_impl.get_custom_buffers_dict()
+        custom_buffers_dict = self.cfg.custom_impl.get_custom_buffers_dict()
         for key, value in custom_buffers_dict.items():
             setattr(self, key, value)
-        initialize = getattr(custom_impl, "initialize_controller", None)
+        initialize = getattr(self.cfg.custom_impl, "initialize_controller", None)
         if initialize is not None:
             initialize(self)
 
@@ -148,7 +147,7 @@ class MainController:
             self.last_lowstate_received_time = t
             self.remote_controller.parse(msg.wireless_remote)
             # Optional lossless sensor bridge; no extra subscriber or SDK client.
-            callback = getattr(custom_impl, "on_lowstate_msg", None)
+            callback = getattr(self.cfg.custom_impl, "on_lowstate_msg", None)
             if callback is not None:
                 callback(self, msg, t)
         self.rc_handler._process_input()
@@ -168,7 +167,7 @@ class MainController:
 
     # Process student-provided custom buffers in control loop
     def _process_custom_buffers(self, t):
-        return custom_impl.update_custom_buffers(self, t)
+        return self.cfg.custom_impl.update_custom_buffers(self, t)
 
     # Read last lowstate msg, publish LowCmd_
     # KNOWN RISK: if this process dies outright (OOM, kill) while in
@@ -219,7 +218,7 @@ class MainController:
 
         lowcmd.crc = self.crc.Crc(lowcmd)
         accepted = self.lowcmd_publisher.Write(lowcmd)
-        sent_hook = getattr(custom_impl, "on_command_sent", None)
+        sent_hook = getattr(self.cfg.custom_impl, "on_command_sent", None)
         if sent_hook is not None:
             sent_hook(self, lowcmd, accepted, t)
 

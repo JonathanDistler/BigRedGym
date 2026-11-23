@@ -25,6 +25,10 @@ import numpy as np
 import torch
 from torch import nn
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from go2_deploy.custom_implementation.custom_config import CustomConfig
+
 CHECKPOINT_SHA = "90117fc2ff80033663578e12ba664e4b1ff4c15c4c04f19619409a800458ba6c"
 REFERENCE_SHA = "21d2c7ca8a9b55b27d1a58d4cc7fae17fdbea2dbedee8ecbacd56cc324e9bb92"
 JOINTS = [
@@ -566,7 +570,48 @@ SLICES = {
 }
 
 
-class CustomDeployConfig:
+class CustomDeployConfig(CustomConfig):
+    task_name = "go2handstand"
+    default_dof_pos = [
+        -2.2248883690812155e-09,
+        0.7334159659826462,
+        -1.4654903159477315,
+        2.2248883690812155e-09,
+        0.7334159659826462,
+        -1.4654903159477315,
+        -2.2248883253671876e-09,
+        0.7334159659826462,
+        -1.4654903159477313,
+        2.2248883253671876e-09,
+        0.7334159659826462,
+        -1.4654903159477313,
+    ]
+
+    def get_custom_buffers_dict(self):
+        return get_custom_buffers_dict()
+
+    def update_custom_buffers(self, main_controller, t):
+        return update_custom_buffers(main_controller, t)
+
+    def get_custom_obs_pieces(self):
+        return get_custom_obs_pieces()
+
+    # Optional runner bridges preserve every IMU sample and actual publications.
+    def prepare_runtime(self, cfg):
+        return prepare_runtime(cfg)
+
+    def initialize_controller(self, main_controller):
+        return initialize_controller(main_controller)
+
+    def on_lowstate_msg(self, main_controller, msg, received):
+        return on_lowstate_msg(main_controller, msg, received)
+
+    def bound_command(self, main_controller, offset, kp_mult=1.0, kd_mult=1.0):
+        return bound_command(main_controller, offset, kp_mult, kd_mult)
+
+    def on_command_sent(self, main_controller, lowcmd, accepted, t):
+        return on_command_sent(main_controller, lowcmd, accepted, t)
+
     obs_vector = list(SLICES)
     custom_obs_sizes = {name: end - start for name, (start, end) in SLICES.items()}
     # Review requirements only: Cornell DeployConfig does not inherit these!

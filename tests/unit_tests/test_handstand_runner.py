@@ -71,6 +71,7 @@ def controller(assets, monkeypatch):
         obs_sizes=team.CustomDeployConfig.custom_obs_sizes,
         DeployScaling=team.CustomDeployConfig.DeployScaling,
         custom_runtime=(policy, trajectory, model, calibration),
+        custom_impl=team.CustomDeployConfig(),
     )
     c = NS(
         cfg=cfg,
@@ -91,7 +92,6 @@ def controller(assets, monkeypatch):
     cmd = NS(motor_cmd=[NS(q=float(x)) for x in target[team.PERMUTATION]])
     team.on_command_sent(c, cmd, True, 0.0)
     c._state = State.CUSTOM_CTRL
-    monkeypatch.setattr(deploy_utility, "custom_impl", team)
     return c
 
 
@@ -238,8 +238,8 @@ def test_bundle_loads_through_cornell_loader_and_checks_calibration(
     from go2_deploy.policy_bundle import load_bundle
 
     folder, _, _, _, _, calibration = assets
-    loaded = import_custom_impl.get_custom_impl_module("go2handstand.py")
-    monkeypatch.setattr(import_custom_impl, "custom_impl", loaded)
+    loaded = import_custom_impl.load_custom_impl("go2handstand")
+    assert isinstance(loaded, team.CustomDeployConfig.__bases__[0])
     monkeypatch.setenv("GO2_HANDSTAND_CALIBRATION", str(calibration))
     policy, cfg = load_bundle(folder)
     assert cfg.obs_dim() == 47 and cfg.ctrl_freq == 50 and not cfg.exp_moving_avg
@@ -251,9 +251,84 @@ def test_bundle_loads_through_cornell_loader_and_checks_calibration(
     assert model_cfg.custom_runtime[3]["source"] == "model_and_ta_estimates"
 
 
-def test_template_loader_rejects_traversal():
-    with pytest.raises(ValueError):
-        import_custom_impl.get_custom_impl_module("../deploy.py")
+def test_template_loader_rejects_unknown_task():
+    with pytest.raises(LookupError):
+        import_custom_impl.load_custom_impl("../deploy.py")
+
+
+def test_canvas_config_is_discovered_once_and_buffers_are_independent(assets):
+    from go2_deploy.custom_implementation.custom_config import CustomConfig
+    from go2_deploy.deploy_config import DeployConfig
+
+    first = import_custom_impl.load_custom_impl("go2handstand")
+    second = import_custom_impl.load_custom_impl("go2handstand")
+    assert isinstance(first, CustomConfig)
+    assert first.task_name == "go2handstand"
+    assert first.obs_vector == list(team.SLICES)
+    assert sum(first.custom_obs_sizes.values()) == 47
+    np.testing.assert_array_equal(first.default_dof_pos, assets[2]["nominal"])
+    cfg = DeployConfig(first)
+    assert cfg.obs_dim() == 47
+    assert list(first.get_custom_obs_pieces()) == list(team.SLICES)
+    a, b = first.get_custom_buffers_dict(), second.get_custom_buffers_dict()
+    a["handstand_imu_queue"].append("sample")
+    assert not b["handstand_imu_queue"]
+
+
+def test_canvas_instance_hooks_process_actual_runner_messages(controller):
+    c = controller
+    impl = c.cfg.custom_impl
+    impl.on_lowstate_msg(c, message(c, 1000), 10.0)
+    c.last_lowstate_msg = message(c, 1000)
+    c.last_lowstate_received_time = 10.0
+    impl.update_custom_buffers(c, 10.0)
+    assert c.handstand_session.active
+    assert c.handstand_snapshot.shape == (47,)
+
+
+def test_canvas_bundle_rejects_a_different_task_config(assets):
+    from go2_deploy.policy_bundle import load_bundle
+
+    with pytest.raises(ValueError, match="bundle is for task"):
+        load_bundle(assets[0], import_custom_impl.load_custom_impl("go2trot"))
+
+
+def test_submission_rejects_modified_archive_before_creating_log(tmp_path):
+    from scripts.package_handstand_submission import package
+
+    archive = tmp_path / "bad.tar.gz"
+    archive.write_bytes(b"not the released training archive")
+    output = tmp_path / "run"
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        package(archive, archive, output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("step", [0, 1, 47, 109, 110, 111, 319, 320, 400])
+def test_canvas_loaded_hybrid_policy_matches_inference_at_boundaries(
+    assets, step, record_property
+):
+    from go2_deploy.policy_bundle import load_bundle
+    from go2_deploy.rl_controller import RLController
+
+    folder, eager, trajectory, *_ = assets
+    scripted, cfg = load_bundle(folder)
+    obs = eager.centers[min(step, 319)].clone()
+    obs[:42] += torch.linspace(-0.01, 0.01, 42)
+    obs[42] = step / 400
+    obs[43:] += 0.003
+    with torch.no_grad():
+        expected, capture, balance, reference = eager.components(obs)
+        actual = scripted(obs)
+        applied_offsets = RLController(cfg, scripted).act(obs)
+    assert int(reference) == min(step, 319)
+    correction = capture if step < 110 else balance
+    law = (eager.actions[min(step, 319)] + correction).clamp(-1, 1)
+    torch.testing.assert_close(expected, law, rtol=0, atol=1e-7)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-7)
+    torch.testing.assert_close(applied_offsets, expected * 2, rtol=0, atol=2e-7)
+    np.testing.assert_allclose(cfg.default_dof_pos, trajectory["nominal"], atol=1e-7)
+    record_property("max_action_error", float(abs(actual - expected).max()))
 
 
 def extracted_main(clock=None):
@@ -293,6 +368,13 @@ def test_exact_runner_callback_delivers_stream_and_fault_stops_before_publish(
     c.request_emergency_stop = lambda: calls.append("estop")
     cls._control_loop(c)
     assert calls == ["estop"]
+
+
+def test_instance_hook_can_defer_cycle_until_first_distinct_packet(controller):
+    cls = extracted_main()
+    c = controller
+    c.cfg.custom_impl = NS(update_custom_buffers=lambda main_controller, t: False)
+    assert cls._process_custom_buffers(c, 10.0) is False
 
 
 @pytest.mark.parametrize("accepted", [True, False])
@@ -387,7 +469,6 @@ def test_bundle_cannot_substitute_a_weights_only_actor(assets, monkeypatch, tmp_
         (copied / "policy.pt").read_bytes()
     ).hexdigest()
     (copied / "deploy_meta.json").write_text(json.dumps(meta))
-    monkeypatch.setattr(import_custom_impl, "custom_impl", team)
     monkeypatch.setenv("GO2_HANDSTAND_CALIBRATION", str(calibration))
     with pytest.raises(ValueError, match="complete pinned"):
         load_bundle(copied)
